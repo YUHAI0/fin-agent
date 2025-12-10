@@ -1,2 +1,0 @@
-[console_scripts]
-fin-agent = fin_agent.main:main
