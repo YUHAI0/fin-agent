@@ -101,16 +101,23 @@ class TaskScheduler:
         return False
 
     def check_conditions(self):
+        # In interactive mode (not verbose), yield to worker if one is running
+        if not self.verbose and self._is_worker_running():
+            return
+
         self.load_tasks()
         
         if self.verbose:
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking {len(self.tasks)} tasks...")
+            enabled_count = sum(1 for t in self.tasks.values() if t.get('enabled', True))
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking {len(self.tasks)} tasks ({enabled_count} enabled)...")
 
         if not self.tasks:
             return
 
         for task_id, task in self.tasks.items():
             if not task.get('enabled', True):
+                if self.verbose:
+                    print(f"  [Task {task_id}] Skipped (Disabled)")
                 continue
                 
             if task['type'] == 'price_alert':
@@ -215,7 +222,15 @@ class TaskScheduler:
                 self.save_tasks()
                     
         except Exception as e:
-            logger.error(f"Error checking task {task['id']}: {e}")
+            if "403" in str(e) and "Forbidden" in str(e):
+                 msg = f"Tushare API 403 Forbidden. Please check your token validity and permissions."
+                 if self.verbose:
+                     print(f"  [Task {task['id']}] Error: {msg}")
+                 else:
+                     # In interactive mode, print to stderr or just log
+                     logger.error(f"Error checking task {task['id']}: {msg}")
+            else:
+                logger.error(f"Error checking task {task['id']}: {e}")
 
     def run_scheduler(self):
         # Schedule the check every 1 minute
