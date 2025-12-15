@@ -144,6 +144,6 @@ Fin-Agent 支持丰富的金融分析场景，您可以参考以下对话来探�
 
 本项目采用 [MIT License](LICENSE) 开源许可证。
 
-## 📈 开发活动
+## 👥 贡献者
 
-![Contribution Graph](https://github-readme-activity-graph.vercel.app/graph?username=YUHAI0&repo=fin-agent&theme=react)
+[![Contributors](https://contrib.rocks/image?repo=YUHAI0/fin-agent)](https://github.com/YUHAI0/fin-agent/graphs/contributors)
