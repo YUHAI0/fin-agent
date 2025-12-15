@@ -51,6 +51,7 @@ class FinAgent:
                                           "For funds flow, limit up/down, or concepts, use the corresponding tools. "
                                           "For portfolio queries (e.g. 'my portfolio', '我的持仓', 'holdings'), ALWAYS use 'get_portfolio_status'. "
                                           "For portfolio management (add/remove position), use 'add_portfolio_position' or 'remove_portfolio_position'. "
+                                          "When setting price alerts with percentages (e.g. 'alert if rises 5%'), you MUST first fetch the current price (or relevant base price), calculate the target absolute price, and then set the alert with that absolute value. "
                                           "For configuration (email, tushare token, llm settings), use 'reset_email_config' or 'reset_core_config'. These tools are INTERACTIVE, so simply call them when requested; do NOT ask the user for details in the chat."
                                           "When analyzing, EXPLICITLY mention the date of the data you are using. "
                                           "Calculate percentage changes and describe the trend (e.g., upward, downward, volatile) based on the data. "

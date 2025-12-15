@@ -93,7 +93,7 @@ SCHEDULER_TOOLS_SCHEMA = [
                     },
                     "threshold": {
                         "type": "number",
-                        "description": "Price threshold to trigger alert."
+                        "description": "The ABSOLUTE PRICE threshold (e.g., 20.5). DO NOT use a percentage or ratio (like 1.01). If the user asks for a percentage rise/fall, you MUST fetch the current price first, calculate the target absolute price, and use that as the threshold."
                     },
                     "email": {
                         "type": "string",
