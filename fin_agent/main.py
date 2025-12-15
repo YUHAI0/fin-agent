@@ -12,6 +12,7 @@ from rich.console import Console
 from fin_agent.utils import FinMarkdown
 from fin_agent.agent.core import FinAgent
 from fin_agent.config import Config
+from fin_agent.scheduler import TaskScheduler
 
 # Initialize colorama
 colorama.init()
@@ -245,6 +246,7 @@ def main():
     parser.add_argument("-v", "--version", action="store_true", help="Show version number and exit")
     parser.add_argument("--clear-token", action="store_true", help="Clear the existing configuration token and exit.")
     parser.add_argument("--upgrade", action="store_true", help="Upgrade fin-agent to the latest version.")
+    parser.add_argument("--worker", action="store_true", help="Run in worker mode (scheduler only, no chat interface).")
     
     args = parser.parse_args()
 
@@ -265,6 +267,20 @@ def main():
 
     if args.upgrade:
         upgrade_package()
+        return
+
+    # Worker Mode
+    if args.worker:
+        print(f"{Fore.GREEN}Starting Fin-Agent Worker (v{get_version()})...{Style.RESET_ALL}")
+        try:
+            # We need to load config first
+            Config.validate()
+        except ValueError:
+            print(f"{Fore.RED}Configuration missing. Please run 'fin-agent' first to configure.{Style.RESET_ALL}")
+            return
+
+        scheduler = TaskScheduler()
+        scheduler.run_forever()
         return
 
     print(f"{Fore.GREEN}Welcome to Fin-Agent (v{get_version()})!{Style.RESET_ALL}")
@@ -289,6 +305,13 @@ def main():
              return
 
     if agent:
+        # Start Scheduler
+        try:
+            scheduler = TaskScheduler()
+            scheduler.start()
+        except Exception as e:
+            print(f"{Fore.YELLOW}Warning: Failed to start scheduler: {e}{Style.RESET_ALL}")
+            
         run_chat_loop(agent)
 
 if __name__ == "__main__":

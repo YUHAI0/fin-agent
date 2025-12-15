@@ -12,6 +12,14 @@ from fin_agent.tools.portfolio_tools import (
     get_portfolio_status, 
     clear_portfolio
 )
+from fin_agent.tools.scheduler_tools import (
+    SCHEDULER_TOOLS_SCHEMA,
+    add_price_alert,
+    list_alerts,
+    remove_alert,
+    update_alert,
+    reset_email_config
+)
 
 # Initialize Tushare - will be re-initialized when called if Config updates
 def get_pro():
@@ -419,8 +427,31 @@ def screen_stocks(pe_min=None, pe_max=None, pb_min=None, pb_max=None,
     except Exception as e:
         return f"Error executing stock screen: {str(e)}"
 
+def reset_core_config():
+    """
+    Reset core configuration (Tushare Token & LLM).
+    """
+    try:
+        print("Initiating core configuration reset...")
+        Config.setup()
+        return "Core configuration wizard finished. New settings are applied."
+    except Exception as e:
+        return f"Error resetting core config: {str(e)}"
+
 # Tool definitions for LLM
 BASE_TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "reset_core_config",
+            "description": "Reset or update core configuration (Tushare Token, LLM Provider, API Keys) interactively. Use this when the user wants to change API keys or providers.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -797,7 +828,7 @@ BASE_TOOLS_SCHEMA = [
 ]
 
 # Combine schemas
-TOOLS_SCHEMA = BASE_TOOLS_SCHEMA + PORTFOLIO_TOOLS_SCHEMA
+TOOLS_SCHEMA = BASE_TOOLS_SCHEMA + PORTFOLIO_TOOLS_SCHEMA + SCHEDULER_TOOLS_SCHEMA
 
 # Helper to execute tool calls
 def execute_tool_call(tool_name, arguments):
@@ -849,5 +880,17 @@ def execute_tool_call(tool_name, arguments):
         return get_portfolio_status(**arguments)
     elif tool_name == "clear_portfolio":
         return clear_portfolio(**arguments)
+    elif tool_name == "add_price_alert":
+        return add_price_alert(**arguments)
+    elif tool_name == "list_alerts":
+        return list_alerts(**arguments)
+    elif tool_name == "remove_alert":
+        return remove_alert(**arguments)
+    elif tool_name == "update_alert":
+        return update_alert(**arguments)
+    elif tool_name == "reset_email_config":
+        return reset_email_config()
+    elif tool_name == "reset_core_config":
+        return reset_core_config()
     else:
         return f"Error: Tool '{tool_name}' not found."

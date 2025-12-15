@@ -93,7 +93,7 @@ PORTFOLIO_TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_portfolio_status",
-            "description": "Get the current portfolio holdings, value, and P&L status.",
+            "description": "Get the current portfolio holdings, value, and P&L status. Use this when the user asks about 'my portfolio', 'my holdings', '我的持仓', or '账户'.",
             "parameters": {
                 "type": "object",
                 "properties": {},

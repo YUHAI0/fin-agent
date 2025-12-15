@@ -19,6 +19,13 @@ class Config:
     OPENAI_BASE_URL = None
     OPENAI_MODEL = None
     
+    # Email Config
+    EMAIL_SMTP_SERVER = None
+    EMAIL_SMTP_PORT = None
+    EMAIL_SENDER = None
+    EMAIL_PASSWORD = None
+    EMAIL_RECEIVER = None
+    
     @staticmethod
     def get_config_dir():
         """Get the configuration directory based on the operating system."""
@@ -67,6 +74,12 @@ class Config:
         cls.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
         cls.OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
         cls.OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        
+        cls.EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER")
+        cls.EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "465")) if os.getenv("EMAIL_SMTP_PORT") else 465
+        cls.EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+        cls.EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+        cls.EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
     @classmethod
     def validate(cls):
@@ -87,11 +100,139 @@ class Config:
         
         if missing:
             raise ValueError(f"Missing environment variables: {', '.join(missing)}")
-    
+            
+    @staticmethod
+    def is_email_configured():
+        """Check if email service is configured."""
+        # Receiver is optional (defaults to sender), so we only check sender/pass/server
+        return all([Config.EMAIL_SMTP_SERVER, Config.EMAIL_SENDER, Config.EMAIL_PASSWORD])
+
+    @classmethod
+    def update_email_config(cls, server, port, sender, password, receiver):
+        """Update email configuration in the .env file."""
+        env_file = cls.get_env_path()
+        
+        # Read existing content
+        lines = []
+        if os.path.exists(env_file):
+            with open(env_file, "r") as f:
+                lines = f.readlines()
+        
+        # Filter out existing email config
+        new_lines = [line for line in lines if not line.strip().startswith(("EMAIL_", "# Email Configuration"))]
+        
+        # Add new config
+        if new_lines and not new_lines[-1].endswith('\n'):
+            new_lines.append('\n')
+            
+        new_lines.append("\n# Email Configuration\n")
+        new_lines.append(f"EMAIL_SMTP_SERVER={server}\n")
+        new_lines.append(f"EMAIL_SMTP_PORT={port}\n")
+        new_lines.append(f"EMAIL_SENDER={sender}\n")
+        new_lines.append(f"EMAIL_PASSWORD={password}\n")
+        new_lines.append(f"EMAIL_RECEIVER={receiver}\n")
+        
+        # Write back
+        with open(env_file, "w") as f:
+            f.writelines(new_lines)
+            
+        # Update current env
+        os.environ["EMAIL_SMTP_SERVER"] = server
+        os.environ["EMAIL_SMTP_PORT"] = str(port)
+        os.environ["EMAIL_SENDER"] = sender
+        os.environ["EMAIL_PASSWORD"] = password
+        os.environ["EMAIL_RECEIVER"] = receiver
+        
+        cls.load()
+
+    @classmethod
+    def setup_email(cls):
+        """Interactive setup for email configuration."""
+        print("\nEmail Configuration (Required for notifications):")
+        print("Common SMTP Servers: smtp.gmail.com, smtp.qq.com, smtp.163.com")
+        
+        email_server = input("SMTP Server: ").strip()
+        email_port = input("SMTP Port [465]: ").strip() or "465"
+        email_sender = input("Sender Email Address: ").strip()
+        email_password = input("Sender Email Password (or App Password): ").strip()
+        email_receiver = input(f"Receiver Email Address [{email_sender}]: ").strip() or email_sender
+
+        cls.update_email_config(email_server, email_port, email_sender, email_password, email_receiver)
+        
+        print(f"Email configuration saved to {cls.get_env_path()}")
+        return True
+
+    @classmethod
+    def update_core_config(cls, tushare_token, provider, deepseek_key, deepseek_base, deepseek_model, openai_key, openai_base, openai_model):
+        """Update core configuration (Tushare & LLM) in the .env file."""
+        env_file = cls.get_env_path()
+        
+        # Read existing content
+        lines = []
+        if os.path.exists(env_file):
+            with open(env_file, "r") as f:
+                lines = f.readlines()
+        
+        # Filter out existing core config (everything except EMAIL_)
+        # Actually it's safer to filter OUT the ones we are replacing.
+        keys_to_remove = ["TUSHARE_TOKEN", "LLM_PROVIDER", 
+                          "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
+                          "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"]
+        
+        new_lines = []
+        for line in lines:
+            is_removed = False
+            for key in keys_to_remove:
+                if line.strip().startswith(key + "="):
+                    is_removed = True
+                    break
+            if not is_removed:
+                new_lines.append(line)
+        
+        # Add new core config at the top (or append if file was empty/only comments)
+        # We'll just append them, order in .env doesn't strictly matter for loading, but for readability maybe top is better.
+        # But appending is safer to not mess up existing structure too much.
+        
+        core_config = []
+        core_config.append(f"TUSHARE_TOKEN={tushare_token}\n")
+        core_config.append(f"LLM_PROVIDER={provider}\n")
+        
+        if provider == "deepseek":
+            core_config.append(f"DEEPSEEK_API_KEY={deepseek_key}\n")
+            core_config.append(f"DEEPSEEK_BASE_URL={deepseek_base}\n")
+            core_config.append(f"DEEPSEEK_MODEL={deepseek_model}\n")
+        else:
+            core_config.append(f"OPENAI_API_KEY={openai_key}\n")
+            core_config.append(f"OPENAI_BASE_URL={openai_base}\n")
+            core_config.append(f"OPENAI_MODEL={openai_model}\n")
+            
+        # Insert at beginning? Or just append. 
+        # If we append, we might have email config before core config. That's fine.
+        new_lines.extend(core_config)
+
+        # Write back
+        with open(env_file, "w") as f:
+            f.writelines(new_lines)
+
+        # Update current env vars
+        os.environ["TUSHARE_TOKEN"] = tushare_token
+        os.environ["LLM_PROVIDER"] = provider
+        
+        if provider == "deepseek":
+            os.environ["DEEPSEEK_API_KEY"] = deepseek_key
+            os.environ["DEEPSEEK_BASE_URL"] = deepseek_base
+            os.environ["DEEPSEEK_MODEL"] = deepseek_model
+        else:
+            os.environ["OPENAI_API_KEY"] = openai_key
+            os.environ["OPENAI_BASE_URL"] = openai_base
+            os.environ["OPENAI_MODEL"] = openai_model
+            
+        cls.load()
+
     @classmethod
     def setup(cls):
         """Interactive setup for environment variables"""
-        print("Configuration missing. Starting setup wizard...")
+        print("Configuration missing (or reset requested). Starting setup wizard...")
         
         tushare_token = input("Enter your Tushare Token: ").strip()
         
@@ -109,13 +250,15 @@ class Config:
         
         provider = "deepseek"
         deepseek_key = ""
+        deepseek_base = "https://api.deepseek.com"
+        deepseek_model = "deepseek-chat"
         
         openai_key = ""
         openai_base = ""
         openai_model = ""
         
         if choice == "1" or not choice:
-            # DeepSeek logic (using specific config variables as before)
+            # DeepSeek logic
             provider = "deepseek"
             deepseek_key = input("Enter DeepSeek API Key: ").strip()
             
@@ -164,54 +307,23 @@ class Config:
                 openai_base = input(f"Enter Base URL [default: {default_base}]: ").strip() or default_base
                 default_model = "llama3"
                 openai_model = input(f"Enter Model Name [default: {default_model}]: ").strip() or default_model
-                openai_key = "ollama" # Local models usually don't need a key, setting dummy
+                openai_key = "ollama" 
                 
             else: # Custom
                 openai_key = input("Enter API Key: ").strip()
                 openai_base = input("Enter Base URL: ").strip()
                 openai_model = input("Enter Model Name: ").strip()
         
-        config_dir = cls.get_config_dir()
-        env_file = cls.get_env_path()
-        
-        # Create config directory if it doesn't exist
-        os.makedirs(config_dir, exist_ok=True)
-        
-        # Write to .env file
-        with open(env_file, "w") as f: # Use 'w' to create/overwrite clean
-            f.write(f"TUSHARE_TOKEN={tushare_token}\n")
-            f.write(f"LLM_PROVIDER={provider}\n")
+        # Use update_core_config to save
+        cls.update_core_config(tushare_token, provider, deepseek_key, deepseek_base, deepseek_model, openai_key, openai_base, openai_model)
             
-            if provider == "deepseek":
-                f.write(f"DEEPSEEK_API_KEY={deepseek_key}\n")
-                f.write(f"DEEPSEEK_BASE_URL=https://api.deepseek.com\n")
-                f.write(f"DEEPSEEK_MODEL=deepseek-chat\n")
-            else:
-                f.write(f"OPENAI_API_KEY={openai_key}\n")
-                f.write(f"OPENAI_BASE_URL={openai_base}\n")
-                f.write(f"OPENAI_MODEL={openai_model}\n")
-            
-        print(f"Configuration saved to {env_file}")
+        print(f"Configuration saved to {cls.get_env_path()}")
         
         # Check if local .env exists and warn user
         local_env = os.path.join(os.getcwd(), ".env")
         if os.path.exists(local_env):
             print(f"WARNING: A local .env file exists at {local_env}")
             print("This local file might override or conflict with the global configuration.")
-        
-        # Manually set env vars for current session to ensure immediate availability
-        os.environ["TUSHARE_TOKEN"] = tushare_token
-        os.environ["LLM_PROVIDER"] = provider
-        if provider == "deepseek":
-            os.environ["DEEPSEEK_API_KEY"] = deepseek_key
-            os.environ["DEEPSEEK_BASE_URL"] = "https://api.deepseek.com"
-            os.environ["DEEPSEEK_MODEL"] = "deepseek-chat"
-        else:
-            os.environ["OPENAI_API_KEY"] = openai_key
-            os.environ["OPENAI_BASE_URL"] = openai_base
-            os.environ["OPENAI_MODEL"] = openai_model
-        
-        cls.load()
 
     @classmethod
     def clear(cls):

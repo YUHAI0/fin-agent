@@ -6,3 +6,4 @@ numpy>=1.24.0
 requests>=2.31.0
 colorama>=0.4.6
 rich>=13.0.0
+schedule>=1.2.0
