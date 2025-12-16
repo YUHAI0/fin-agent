@@ -49,11 +49,11 @@
 - [x] **自动化与个性化助理 (Automation & Personalization)**
     - [x] 支持定时任务。
     - [x] 自定义条件监控与即时消息推送。
-    - [ ] 用户投资风格画像与偏好记忆 (Long-term Memory)。
+    - [x] 用户投资风格画像与偏好记忆 (Long-term Memory)。
 
 - [ ] **智能记忆与上下文管理 (Smart Memory & Context)**
-    - [ ] 多轮对话上下文保持 (Multi-turn Context)。
-    - [ ] 历史对话摘要与跨会话记忆 (Session Summary & Recall)。
+    - [x] 多轮对话上下文保持 (Multi-turn Context)。
+    - [x] 历史对话摘要与跨会话记忆 (Session Summary & Recall)。
 
 - [ ] **全资产覆盖与宏观视角 (Multi-Asset & Macro)**
     - [ ] 扩展 ETF、可转债、期货等投资品种数据。

@@ -20,6 +20,11 @@ from fin_agent.tools.scheduler_tools import (
     update_alert,
     reset_email_config
 )
+from fin_agent.tools.profile_tools import (
+    PROFILE_TOOLS_SCHEMA,
+    update_user_profile,
+    get_user_profile
+)
 
 # Initialize Tushare - will be re-initialized when called if Config updates
 def get_pro():
@@ -828,7 +833,7 @@ BASE_TOOLS_SCHEMA = [
 ]
 
 # Combine schemas
-TOOLS_SCHEMA = BASE_TOOLS_SCHEMA + PORTFOLIO_TOOLS_SCHEMA + SCHEDULER_TOOLS_SCHEMA
+TOOLS_SCHEMA = BASE_TOOLS_SCHEMA + PORTFOLIO_TOOLS_SCHEMA + SCHEDULER_TOOLS_SCHEMA + PROFILE_TOOLS_SCHEMA
 
 # Helper to execute tool calls
 def execute_tool_call(tool_name, arguments):
@@ -892,5 +897,9 @@ def execute_tool_call(tool_name, arguments):
         return reset_email_config()
     elif tool_name == "reset_core_config":
         return reset_core_config()
+    elif tool_name == "update_user_profile":
+        return update_user_profile(**arguments)
+    elif tool_name == "get_user_profile":
+        return get_user_profile(**arguments)
     else:
         return f"Error: Tool '{tool_name}' not found."

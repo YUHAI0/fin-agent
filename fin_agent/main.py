@@ -211,6 +211,12 @@ input("\\nPress Enter to exit...")
 def run_chat_loop(agent):
     print(f"{Fore.GREEN}Agent initialized successfully.{Style.RESET_ALL}")
     print("Type 'exit' or 'quit' to end the session.")
+    print("Type '/clear' to start a new conversation.")
+    print("Type '/save' to save current session manually.")
+    print("Type '/load' to load the last session.")
+    
+    # Check if a previous session exists and ask? Or just auto-load if arg provided?
+    # For now, let's just keep it simple with commands.
     
     console = Console()
     
@@ -221,8 +227,26 @@ def run_chat_loop(agent):
                 continue
                 
             if user_input.lower() in ['exit', 'quit']:
+                print(f"{Fore.YELLOW}Saving session...{Style.RESET_ALL}")
+                save_msg = agent.save_session()
+                print(f"{Fore.CYAN}{save_msg}{Style.RESET_ALL}")
                 print("Goodbye!")
                 break
+                
+            if user_input.lower() == '/clear':
+                agent.clear_history()
+                print(f"{Fore.YELLOW}Conversation history cleared.{Style.RESET_ALL}")
+                continue
+                
+            if user_input.lower() == '/save':
+                msg = agent.save_session()
+                print(f"{Fore.CYAN}{msg}{Style.RESET_ALL}")
+                continue
+                
+            if user_input.lower() == '/load':
+                msg = agent.load_session()
+                print(f"{Fore.CYAN}{msg}{Style.RESET_ALL}")
+                continue
                 
             response = agent.run(user_input)
             if response: # Only print if there's a response (might be empty if interrupted)
@@ -230,6 +254,8 @@ def run_chat_loop(agent):
                 console.print(FinMarkdown(response))
             
         except (KeyboardInterrupt, EOFError):
+            print(f"\n{Fore.YELLOW}Saving session...{Style.RESET_ALL}")
+            agent.save_session()
             print("\nGoodbye!")
             # Use os._exit(0) to immediately terminate without triggering atexit handlers
             # which can cause "Exception ignored in atexit callback" stack traces with colorama on Windows

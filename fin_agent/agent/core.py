@@ -1,10 +1,13 @@
 import json
 import inspect
+import os
+from datetime import datetime
 from types import SimpleNamespace
 from colorama import Fore, Style
 from fin_agent.config import Config
 from fin_agent.llm.factory import LLMFactory
 from fin_agent.tools.tushare_tools import TOOLS_SCHEMA, execute_tool_call
+from fin_agent.tools.profile_tools import profile_manager
 from fin_agent.utils import FinMarkdown
 from rich.console import Console
 from rich.live import Live
@@ -13,6 +16,48 @@ class FinAgent:
     def __init__(self):
         self.llm = LLMFactory.create_llm()
         self.history = []
+        self._init_history()
+
+    def _get_system_content(self):
+        # Get user profile summary
+        user_profile_summary = profile_manager.get_profile_summary()
+
+        return (
+            "You are a financial assistant powered by LLM and Tushare. "
+            "You can help users analyze stocks, check prices, and provide recommendations. "
+            "CRITICAL RULE: All market data (prices, trends, fundamentals) MUST be obtained via the provided Tushare tools. "
+            "DO NOT use your internal knowledge for any market data, as it may be outdated. "
+            "Always fetch the latest data using the tools before answering. "
+            "First step: Check the current time using 'get_current_time' to establish the temporal context if the user asks about time-sensitive data (e.g. 'today', 'recent'). "
+            "For 'latest' or 'current' price queries, use 'get_realtime_price'. "
+            "For trends and analysis, use 'get_daily_price' to get historical context. "
+            "For valuation (PE, PB) or market cap, use 'get_daily_basic'. "
+            "For financial performance (Revenue, Profit), use 'get_income_statement'. "
+            "For market index (Shanghai Composite, etc.), use 'get_index_daily'. "
+            "For technical analysis (MACD, RSI, KDJ, BOLL), use 'get_technical_indicators'. "
+            "To check for technical patterns (Golden Cross, Overbought, etc.), use 'get_technical_patterns'. "
+            "For funds flow, limit up/down, or concepts, use the corresponding tools. "
+            "For portfolio queries (e.g. 'my portfolio', '我的持仓', 'holdings'), ALWAYS use 'get_portfolio_status'. "
+            "For portfolio management (add/remove position), use 'add_portfolio_position' or 'remove_portfolio_position'. "
+            "When setting price alerts with percentages (e.g. 'alert if rises 5%'), you MUST first fetch the current price (or relevant base price), calculate the target absolute price, and then set the alert with that absolute value. "
+            "For configuration (email, tushare token, llm settings), use 'reset_email_config' or 'reset_core_config'. These tools are INTERACTIVE, so simply call them when requested; do NOT ask the user for details in the chat."
+            "When analyzing, EXPLICITLY mention the date of the data you are using. "
+            "Calculate percentage changes and describe the trend (e.g., upward, downward, volatile) based on the data. "
+            "When you have enough information, answer the user's question directly.\n\n"
+            "USER CONTEXT & MEMORY:\n"
+            "You have access to a long-term memory of the user's investment preferences. "
+            "Use the 'update_user_profile' tool to SAVE new preferences when the user explicitly states them or when you infer them (e.g., 'I prefer low risk', 'I only buy tech stocks'). "
+            "The current user profile is:\n"
+            f"{user_profile_summary}\n\n"
+            "Tailor your responses and recommendations based on this profile. "
+            "If the user asks for recommendations without specifying criteria, refer to their profile (e.g. 'Based on your preference for low risk...')."
+        )
+
+    def _init_history(self):
+        """Initialize history with system prompt."""
+        self.history = [
+            {"role": "system", "content": self._get_system_content()}
+        ]
 
     def _to_dict(self, message):
         """Helper to convert message object to dictionary."""
@@ -29,35 +74,57 @@ class FinAgent:
             "tool_calls": getattr(message, "tool_calls", None)
         }
 
+    def save_session(self, filename="last_session.json"):
+        """Save current session history to file."""
+        config_dir = Config.get_config_dir()
+        filepath = os.path.join(config_dir, "sessions", filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(self.history, f, ensure_ascii=False, indent=2)
+            return f"Session saved to {filepath}"
+        except Exception as e:
+            return f"Error saving session: {e}"
+
+    def load_session(self, filename="last_session.json"):
+        """Load session history from file."""
+        config_dir = Config.get_config_dir()
+        filepath = os.path.join(config_dir, "sessions", filename)
+        
+        if not os.path.exists(filepath):
+            return "No saved session found."
+            
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                self.history = json.load(f)
+            # Ensure we update the system prompt part of the loaded history to reflect latest code/profile?
+            # Or trust the saved one? Usually, we want the LATEST profile in system prompt.
+            # Let's update the first message if it is 'system'
+            if self.history and self.history[0].get('role') == 'system':
+                self.history[0]['content'] = self._get_system_content()
+                
+            return f"Session loaded from {filepath}"
+        except Exception as e:
+            return f"Error loading session: {e}"
+
+    def clear_history(self):
+        """Clear conversation history (keep system prompt)."""
+        self._init_history()
+
     def run(self, user_input):
         """
         Run the agent with user input.
         """
-        # Initialize conversation with user input
-        self.history = [
-            {"role": "system", "content": "You are a financial assistant powered by LLM and Tushare. "
-                                          "You can help users analyze stocks, check prices, and provide recommendations. "
-                                          "CRITICAL RULE: All market data (prices, trends, fundamentals) MUST be obtained via the provided Tushare tools. "
-                                          "DO NOT use your internal knowledge for any market data, as it may be outdated. "
-                                          "Always fetch the latest data using the tools before answering. "
-                                          "First step: Check the current time using 'get_current_time' to establish the temporal context if the user asks about time-sensitive data (e.g. 'today', 'recent'). "
-                                          "For 'latest' or 'current' price queries, use 'get_realtime_price'. "
-                                          "For trends and analysis, use 'get_daily_price' to get historical context. "
-                                          "For valuation (PE, PB) or market cap, use 'get_daily_basic'. "
-                                          "For financial performance (Revenue, Profit), use 'get_income_statement'. "
-                                          "For market index (Shanghai Composite, etc.), use 'get_index_daily'. "
-                                          "For technical analysis (MACD, RSI, KDJ, BOLL), use 'get_technical_indicators'. "
-                                          "To check for technical patterns (Golden Cross, Overbought, etc.), use 'get_technical_patterns'. "
-                                          "For funds flow, limit up/down, or concepts, use the corresponding tools. "
-                                          "For portfolio queries (e.g. 'my portfolio', '我的持仓', 'holdings'), ALWAYS use 'get_portfolio_status'. "
-                                          "For portfolio management (add/remove position), use 'add_portfolio_position' or 'remove_portfolio_position'. "
-                                          "When setting price alerts with percentages (e.g. 'alert if rises 5%'), you MUST first fetch the current price (or relevant base price), calculate the target absolute price, and then set the alert with that absolute value. "
-                                          "For configuration (email, tushare token, llm settings), use 'reset_email_config' or 'reset_core_config'. These tools are INTERACTIVE, so simply call them when requested; do NOT ask the user for details in the chat."
-                                          "When analyzing, EXPLICITLY mention the date of the data you are using. "
-                                          "Calculate percentage changes and describe the trend (e.g., upward, downward, volatile) based on the data. "
-                                          "When you have enough information, answer the user's question directly."},
-            {"role": "user", "content": user_input}
-        ]
+        # Update system prompt to ensure latest profile is used
+        if self.history and self.history[0].get('role') == 'system':
+             self.history[0]['content'] = self._get_system_content()
+        else:
+             # Should not happen if initialized correctly, but safety check
+             self.history.insert(0, {"role": "system", "content": self._get_system_content()})
+
+        # Append user input
+        self.history.append({"role": "user", "content": user_input})
 
         step = 0
         try:
@@ -215,11 +282,6 @@ class FinAgent:
                     if stream_mode:
                         return "" # Already printed
                     else:
-                        return "" # Already printed (via Console().print above) or we return it? 
-                        # The original code returned answer if not stream_mode.
-                        # But main.py likely prints the return value.
-                        # Let's check main.py usage.
-                        # Original: return answer
                         return answer
 
                 # Handle tool calls
