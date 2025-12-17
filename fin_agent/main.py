@@ -391,6 +391,7 @@ def main():
     parser.add_argument("--upgrade", action="store_true", help="Upgrade fin-agent to the latest version.")
     parser.add_argument("--worker", action="store_true", help="Run in worker mode (scheduler only, no chat interface).")
     parser.add_argument("--cycle", type=int, default=10, help="Scheduler interval in minutes (default: 10, only for worker mode).")
+    parser.add_argument("--backend-scheduler", action="store_true", help="Run scheduler in background during interactive mode.")
     
     args = parser.parse_args()
 
@@ -449,12 +450,14 @@ def main():
              return
 
     if agent:
-        # Start Scheduler
-        try:
-            scheduler = TaskScheduler()
-            scheduler.start()
-        except Exception as e:
-            print(f"{Fore.YELLOW}Warning: Failed to start scheduler: {e}{Style.RESET_ALL}")
+        # Start Scheduler if requested
+        if args.backend_scheduler:
+            try:
+                scheduler = TaskScheduler()
+                scheduler.start()
+                print(f"{Fore.GREEN}Background scheduler started.{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.YELLOW}Warning: Failed to start scheduler: {e}{Style.RESET_ALL}")
             
         run_chat_loop(agent)
 

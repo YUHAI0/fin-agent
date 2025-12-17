@@ -11,6 +11,7 @@ from fin_agent.tools.profile_tools import profile_manager
 from fin_agent.utils import FinMarkdown
 from rich.console import Console
 from rich.live import Live
+from rich.markdown import Markdown
 
 class FinAgent:
     def __init__(self):
@@ -126,6 +127,9 @@ class FinAgent:
         # Append user input
         self.history.append({"role": "user", "content": user_input})
 
+        # Initialize console for rich output
+        console = Console()
+
         step = 0
         try:
             while True:
@@ -151,27 +155,122 @@ class FinAgent:
                         buffer = ""
                         thinking_state = False
                         
-                        # Markdown Live State
-                        live_md = None
+                        # State for Markdown Streaming
                         md_buffer = ""
+                        in_code_block = False
+                        
+                        # Live component for the *current, incomplete* chunk
+                        # We use vertical_overflow="visible" but since we clear it often, it won't grow infinitely.
+                        live_md = Live(FinMarkdown(""), console=console, auto_refresh=True, refresh_per_second=10, vertical_overflow="visible")
+                        live_md.start()
 
                         def stop_md():
-                            nonlocal live_md, md_buffer
                             if live_md:
                                 live_md.stop()
-                                live_md = None
-                                md_buffer = ""
 
                         def update_md(text):
-                            nonlocal live_md, md_buffer
+                            nonlocal md_buffer, in_code_block
+                            
+                            # Append new text
                             md_buffer += text
-                            if live_md is None:
-                                # refresh_per_second controls how often the screen is updated
-                                # Lowering it slightly might help with flickering, but keeping it smooth
-                                live_md = Live(FinMarkdown(md_buffer), auto_refresh=True, refresh_per_second=4, vertical_overflow="visible")
-                                live_md.start()
+                            
+                            # We want to "commit" (print permanently) any complete blocks to avoid Live scrolling issues.
+                            # A complete block is defined as text ending with a newline, UNLESS we are in a code block.
+                            
+                            # Naive check for code block toggle
+                            # We check the *newly added* text for fences, or scan the buffer?
+                            # Safest is to scan the buffer line by line if we are not in code block.
+                            
+                            if not in_code_block:
+                                # Split by newline to find commit points
+                                if '\n' in md_buffer:
+                                    lines = md_buffer.split('\n')
+                                    
+                                    # We keep the last line as it might be incomplete
+                                    # Unless the text ends with \n, then even the last line is complete?
+                                    # split('a\n', '\n') -> ['a', '']
+                                    
+                                    # Process all complete lines
+                                    # If md_buffer ends with \n, all lines in split result (except last empty) are complete.
+                                    # If md_buffer does NOT end with \n, the last element is incomplete.
+                                    
+                                    complete_lines = lines[:-1]
+                                    remainder = lines[-1]
+                                    
+                                    # If we have complete lines, check if they start a code block
+                                    for i, line in enumerate(complete_lines):
+                                        # Check for code fence
+                                        # We assume a fence is "```" at start of line (ignoring whitespace)
+                                        if line.strip().startswith("```"):
+                                            # We found a code block start!
+                                            # We cannot commit this line alone, and we are now in code block mode.
+                                            # We must stop committing lines and keep the rest in buffer.
+                                            
+                                            # Commit everything BEFORE this line
+                                            to_commit = "\n".join(complete_lines[:i])
+                                            if to_commit:
+                                                # Clear Live temporarily to print above
+                                                live_md.update(FinMarkdown(""))
+                                                console.print(FinMarkdown(to_commit))
+                                            
+                                            # The rest (from fence onwards) stays in buffer
+                                            # We rejoin the rest of complete_lines + remainder
+                                            md_buffer = "\n".join(complete_lines[i:] + [remainder])
+                                            in_code_block = True
+                                            break
+                                    else:
+                                        # No code block start found in complete lines
+                                        # Commit all complete lines
+                                        to_commit = "\n".join(complete_lines)
+                                        if to_commit:
+                                            live_md.update(FinMarkdown(""))
+                                            console.print(FinMarkdown(to_commit))
+                                        
+                                        md_buffer = remainder
+
                             else:
-                                live_md.update(FinMarkdown(md_buffer))
+                                # We are IN a code block. We wait for it to close.
+                                # Check if we have the closing fence in the buffer.
+                                if "```" in text or "```" in md_buffer: 
+                                    # Naive check: does the buffer contain a line starting with ``` that closes it?
+                                    # We need to be careful not to match the opening fence if we just added it.
+                                    # But we only enter this block if we already processed the opening fence (it's in md_buffer).
+                                    
+                                    # Let's verify line by line
+                                    lines = md_buffer.split('\n')
+                                    # We skip the first line if it's the opening fence? 
+                                    # Actually, just look for a closing fence.
+                                    
+                                    # Find closing fence index
+                                    closing_index = -1
+                                    
+                                    # We need to skip the opening fence. 
+                                    # Since we just entered in_code_block, the opening fence is at the start of md_buffer.
+                                    # But wait, md_buffer accumulates.
+                                    
+                                    for i, line in enumerate(lines):
+                                        if i == 0 and line.strip().startswith("```"):
+                                            continue # Skip opening
+                                        
+                                        if line.strip().startswith("```"):
+                                            closing_index = i
+                                            break
+                                    
+                                    if closing_index != -1:
+                                        # Found closing fence!
+                                        # Commit the whole block
+                                        to_commit = "\n".join(lines[:closing_index+1])
+                                        remainder = "\n".join(lines[closing_index+1:])
+                                        
+                                        live_md.update(FinMarkdown(""))
+                                        console.print(FinMarkdown(to_commit))
+                                        
+                                        md_buffer = remainder
+                                        in_code_block = False
+
+                            # Update Live with whatever is left in buffer
+                            # Note: FinMarkdown might look partial, but that's what we want for streaming
+                            live_md.update(FinMarkdown(md_buffer))
 
                         try:
                             for chunk in response:
@@ -218,6 +317,10 @@ class FinAgent:
                                                 print(Style.RESET_ALL, end="", flush=True)
                                                 thinking_state = False
                                                 
+                                                # Restart Live Markdown
+                                                live_md = Live(FinMarkdown(""), console=console, auto_refresh=True, refresh_per_second=10, vertical_overflow="visible")
+                                                live_md.start()
+                                                
                                                 # Consume potential newline after </think> if it starts the remaining buffer
                                                 if buffer.startswith("\n"):
                                                     buffer = buffer[1:]
@@ -244,6 +347,11 @@ class FinAgent:
                                 else:
                                     update_md(buffer)
                             
+                            # Final flush of md_buffer
+                            if md_buffer:
+                                live_md.update(FinMarkdown("")) # Clear Live
+                                console.print(FinMarkdown(md_buffer)) # Print Final
+                            
                             stop_md()
                             
                             # Ensure reset if still thinking (unlikely for well-formed output)
@@ -263,8 +371,8 @@ class FinAgent:
                              return ""
 
                         # If we printed content, add a newline at the end
-                        if full_content and not thinking_state and not full_content.endswith("\n"):
-                            print() 
+                        # if full_content and not thinking_state and not full_content.endswith("\n"):
+                        #    print() 
  
                             
                     else:
