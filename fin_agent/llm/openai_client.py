@@ -140,6 +140,15 @@ class OpenAICompatibleClient(LLMBase):
                     for tc in delta.tool_calls:
                         index = tc.index
                         
+                        # Yield a tool_call_chunk to allow real-time display
+                        yield {
+                            "type": "tool_call_chunk",
+                            "index": index,
+                            "id": tc.id if tc.id else None,
+                            "name": tc.function.name if tc.function and tc.function.name else None,
+                            "arguments": tc.function.arguments if tc.function and tc.function.arguments else None
+                        }
+
                         if index not in collected_tool_calls:
                             collected_tool_calls[index] = {
                                 "id": "", "type": "function", "name": "", "arguments": ""

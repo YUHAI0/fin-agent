@@ -170,35 +170,121 @@ class FinAgent:
                                     
                                     while True:
                                         if not thinking_state:
-                                            if "<think>" in buffer:
-                                                pre, buffer = buffer.split("<think>", 1)
+                                            # Look for <think>
+                                            tag = "<think>"
+                                            if tag in buffer:
+                                                pre, buffer = buffer.split(tag, 1)
                                                 if pre:
                                                     yield {"type": "content", "content": pre}
                                                 yield {"type": "log", "content": "Thinking..."}
                                                 thinking_state = True
-                                            else:
-                                                # Avoid yielding partial tags like "<th"
-                                                if len(buffer) < 7: break
-                                                to_yield = buffer[:-6]
-                                                buffer = buffer[-6:]
-                                                yield {"type": "content", "content": to_yield}
+                                                continue # Re-evaluate buffer in thinking state
+                                            
+                                            # Smart Flush: Yield anything that can't be part of <think>
+                                            # If no '<', yield all
+                                            if "<" not in buffer:
+                                                if buffer:
+                                                    yield {"type": "content", "content": buffer}
+                                                    buffer = ""
                                                 break
+                                            
+                                            # Has '<'. Find first '<'
+                                            idx = buffer.find("<")
+                                            # Yield everything before '<'
+                                            if idx > 0:
+                                                yield {"type": "content", "content": buffer[:idx]}
+                                                buffer = buffer[idx:]
+                                            
+                                            # Now buffer starts with '<'
+                                            # Check if it matches partial tag
+                                            # buffer is like "<...", len >= 1
+                                            
+                                            # If buffer is shorter than tag, checking partial match
+                                            # Optimization: just check if it IS a prefix
+                                            if tag.startswith(buffer):
+                                                # It is a prefix, we must wait for more data
+                                                break
+                                            
+                                            # It's NOT a prefix of <think> (e.g. "<div>" or "< 5")
+                                            # But wait, what if buffer is longer than tag?
+                                            # We already checked `if tag in buffer`.
+                                            # So if len(buffer) >= len(tag) and tag not in buffer (at start),
+                                            # then it's not our tag.
+                                            
+                                            if len(buffer) >= len(tag):
+                                                # We know it starts with < but is not <think>
+                                                # Yield the < and continue
+                                                yield {"type": "content", "content": "<"}
+                                                buffer = buffer[1:]
+                                                continue
+                                            
+                                            # If len(buffer) < len(tag), we checked startswith above.
+                                            # If it didn't match startswith, it's not our tag.
+                                            if not tag.startswith(buffer):
+                                                 yield {"type": "content", "content": "<"}
+                                                 buffer = buffer[1:]
+                                                 continue
+                                            
+                                            # Should be caught by startswith check, but safe break
+                                            break
+
                                         else:
-                                            if "</think>" in buffer:
-                                                pre, buffer = buffer.split("</think>", 1)
+                                            # Thinking State - Look for </think>
+                                            tag = "</think>"
+                                            if tag in buffer:
+                                                pre, buffer = buffer.split(tag, 1)
                                                 if pre: 
                                                     yield {"type": "thinking", "content": pre}
                                                 thinking_state = False
                                                 # yield {"type": "log", "content": "Thinking ended."}
                                                 if buffer.startswith("\n"): buffer = buffer[1:]
                                                 elif buffer.startswith("\r\n"): buffer = buffer[2:]
-                                            else:
-                                                if len(buffer) < 8: break
-                                                to_yield = buffer[:-7]
-                                                buffer = buffer[-7:]
-                                                yield {"type": "thinking", "content": to_yield}
+                                                continue # Re-evaluate buffer in content state
+
+                                            # Smart Flush for Thinking
+                                            if "<" not in buffer:
+                                                if buffer:
+                                                    yield {"type": "thinking", "content": buffer}
+                                                    buffer = ""
                                                 break
+                                            
+                                            idx = buffer.find("<")
+                                            if idx > 0:
+                                                yield {"type": "thinking", "content": buffer[:idx]}
+                                                buffer = buffer[idx:]
+                                            
+                                            # buffer starts with <
+                                            if tag.startswith(buffer):
+                                                break
+                                            
+                                            if len(buffer) >= len(tag):
+                                                yield {"type": "thinking", "content": "<"}
+                                                buffer = buffer[1:]
+                                                continue
+                                                
+                                            if not tag.startswith(buffer):
+                                                 yield {"type": "thinking", "content": "<"}
+                                                 buffer = buffer[1:]
+                                                 continue
+                                            
+                                            break
                                     
+                                elif chunk['type'] == 'tool_call_chunk':
+                                    # If we receive a tool call chunk, it means content/thinking stream is paused or done for now.
+                                    # Flush buffer immediately to show any pending thinking/content
+                                    if buffer:
+                                        if thinking_state:
+                                            yield {"type": "thinking", "content": buffer}
+                                        else:
+                                            yield {"type": "content", "content": buffer}
+                                        buffer = ""
+
+                                    # Yield the tool call chunk to frontend for real-time update
+                                    yield chunk
+
+                                    # Yield the tool call chunk to frontend for real-time update
+                                    yield chunk
+
                                 elif chunk['type'] == 'response':
                                     debug_print("Received final response object", file=sys.stderr)
                                     message = chunk['response']
@@ -211,7 +297,7 @@ class FinAgent:
                                     yield {"type": "thinking", "content": buffer}
                                 else:
                                     yield {"type": "content", "content": buffer}
-                                
+                            
                         except KeyboardInterrupt:
                             # print("DEBUG: KeyboardInterrupt during iteration", file=sys.stderr)
                             stream_interrupted = True
