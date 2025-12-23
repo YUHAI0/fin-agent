@@ -7,6 +7,7 @@
 [![License](https://img.shields.io/github/license/YUHAI0/fin-agent.svg?style=flat-square)](https://github.com/YUHAI0/fin-agent/blob/main/LICENSE)
 [![Repo Size](https://img.shields.io/github/repo-size/YUHAI0/fin-agent.svg?style=flat-square)](https://github.com/YUHAI0/fin-agent)
 [![Last Commit](https://img.shields.io/github/last-commit/YUHAI0/fin-agent.svg?style=flat-square)](https://github.com/YUHAI0/fin-agent/commits/main)
+[![Star this repo](https://img.shields.io/github/stars/YUHAI0/fin-agent?style=social&label=Star)](https://github.com/YUHAI0/fin-agent)
 
 </div>
 
@@ -191,3 +192,7 @@ Fin-Agent 支持丰富的金融分析场景，您可以参考以下对话来探�
 ## 👥 开源贡献
 
 ![Alt](https://repobeats.axiom.co/api/embed/788a8349b9decac56318a205859ba6d52b2edddd.svg "Repobeats analytics image")
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=YUHAI0/fin-agent&type=date&legend=top-left)](https://www.star-history.com/#YUHAI0/fin-agent&type=date&legend=top-left)
