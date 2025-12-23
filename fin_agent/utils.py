@@ -24,3 +24,4 @@ class FinMarkdown(Markdown):
     elements = Markdown.elements.copy()
     elements["heading_open"] = LeftAlignedHeading
 
+
