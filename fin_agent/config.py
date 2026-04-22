@@ -139,12 +139,11 @@ class Config:
         if cls.LLM_PROVIDER == "deepseek":
             if not cls.DEEPSEEK_API_KEY:
                 missing.append("DEEPSEEK_API_KEY")
-        elif cls.LLM_PROVIDER in ["openai", "local", "openrouter"]:
-             if not cls.OPENAI_API_KEY and cls.LLM_PROVIDER != "local":
-                # For strictly OpenAI provider, key is usually required.
-                # For 'local', we might allow empty key if user really wants to, 
-                # but standard check:
-                pass
+        elif cls.LLM_PROVIDER in ["openai", "kimi", "glm", "qwen", "siliconflow", "openrouter"]:
+            if not cls.OPENAI_API_KEY:
+                missing.append("OPENAI_API_KEY")
+        elif cls.LLM_PROVIDER == "local":
+            pass
         
         if missing:
             raise ValueError(f"Missing environment variables: {', '.join(missing)}")

@@ -354,8 +354,8 @@ class FinAgent:
                     arguments = tool_call.function.arguments
                     call_id = tool_call.id
                     
-                    # print(f"DEBUG: Tool Call: {function_name}", file=sys.stderr)
-                    yield {"type": "tool_call", "tool_name": function_name, "args": arguments}
+                    if not Config.LLM_STREAM:
+                        yield {"type": "tool_call", "tool_name": function_name, "args": arguments}
                     
                     # Execute tool
                     try:
