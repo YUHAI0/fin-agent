@@ -175,6 +175,22 @@ class BacktestEngine:
         else:
             max_drawdown = 0
             
+        equity_curve = []
+        for pv in self.portfolio_values:
+            td = pv.get("trade_date")
+            val = float(pv.get("value", 0))
+            try:
+                td_str = str(int(float(td)))
+            except (TypeError, ValueError):
+                td_str = str(td) if td is not None else ""
+            equity_curve.append(
+                {
+                    "trade_date": td_str,
+                    "value": round(val, 2),
+                    "return_pct": round((val / self.initial_capital - 1) * 100, 4),
+                }
+            )
+
         return {
             "ts_code": ts_code,
             "strategy": strategy_config.get('type'),
@@ -183,7 +199,8 @@ class BacktestEngine:
             "total_return_pct": round(total_return * 100, 2),
             "max_drawdown_pct": round(max_drawdown * 100, 2),
             "trades_count": len(self.history),
-            "trades": self.history[-5:] # Return last 5 trades for brevity
+            "trades": self.history[-5:],  # Return last 5 trades for brevity
+            "equity_curve": equity_curve,
         }
 
 def run_backtest(ts_code, strategy="ma_cross", start_date=None, end_date=None, params=None):
