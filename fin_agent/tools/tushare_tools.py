@@ -31,6 +31,30 @@ def get_pro():
     ts.set_token(Config.TUSHARE_TOKEN)
     return ts.pro_api()
 
+def _parse_daily_adj(adj):
+    """
+    解析日线复权方式。返回 (None|'qfq'|'hfq', error_message)。
+    None 表示不复权，走 pro.daily；qfq/hfq 走 ts.pro_bar。
+    """
+    if adj is None:
+        return (None, None)
+    if isinstance(adj, str) and not adj.strip():
+        return (None, None)
+    s = str(adj).strip()
+    sl = s.lower()
+    if sl in ("qfq", "hfq"):
+        return (sl, None)
+    zh = {"不复权": None, "前复权": "qfq", "后复权": "hfq"}
+    if s in zh:
+        return (zh[s], None)
+    if sl in ("none", "raw", "bfq", "unadjusted"):
+        return (None, None)
+    return (
+        None,
+        f"Error: invalid adj '{adj}'. Use null/omit for 不复权, 'qfq'/前复权, or 'hfq'/后复权.",
+    )
+
+
 def get_current_time():
     """Get current date and time."""
     now = datetime.now()
@@ -66,12 +90,14 @@ def get_stock_basic(ts_code=None, name=None):
     except Exception as e:
         return f"Error fetching stock basic info: {str(e)}"
 
-def get_daily_price(ts_code, start_date=None, end_date=None):
+def get_daily_price(ts_code, start_date=None, end_date=None, adj=None):
     """
-    Get daily stock price.
+    Get daily stock price (A 股日线).
     :param ts_code: Stock code
     :param start_date: Start date (YYYYMMDD)
     :param end_date: End date (YYYYMMDD)
+    :param adj: Optional 复权. None/omit/不复权: 未复权 (pro.daily).
+                 'qfq' 或 前复权: 前复权 (ts.pro_bar)；'hfq' 或 后复权: 后复权 (ts.pro_bar)。
     :return: JSON string
     """
     if not start_date:
@@ -80,10 +106,22 @@ def get_daily_price(ts_code, start_date=None, end_date=None):
     if not end_date:
         end_date = datetime.now().strftime('%Y%m%d')
 
+    adj_mode, adj_err = _parse_daily_adj(adj)
+    if adj_err:
+        return adj_err
+
     try:
         pro = get_pro()
-        df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
-        if df.empty:
+        if adj_mode is None:
+            df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        else:
+            df = ts.pro_bar(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                adj=adj_mode,
+            )
+        if df is None or df.empty:
             return f"No data found for {ts_code} between {start_date} and {end_date}."
         
         # Ensure data is sorted by date descending
@@ -1230,7 +1268,7 @@ BASE_TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_daily_price",
-            "description": "Get historical daily price data for a stock within a date range (Open, High, Low, Close, Vol).",
+            "description": "Get historical daily OHLCV for A-share stocks. Optional adjustment: omit for unadjusted (交易所原始价); qfq/前复权 forward-adjusted; hfq/后复权 backward-adjusted (uses pro_bar).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1245,6 +1283,10 @@ BASE_TOOLS_SCHEMA = [
                     "end_date": {
                         "type": "string",
                         "description": "End date in YYYYMMDD format. Defaults to today."
+                    },
+                    "adj": {
+                        "type": "string",
+                        "description": "Optional 复权. Omit or null: 不复权 (pro.daily). 'qfq' or '前复权': forward adjusted. 'hfq' or '后复权': backward adjusted. Also accepts 'none'/'bfq' for unadjusted."
                     }
                 },
                 "required": ["ts_code"]
