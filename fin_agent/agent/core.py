@@ -349,7 +349,7 @@ class FinAgent:
                 # print(f"DEBUG: Processing {len(message.tool_calls)} tool calls", file=sys.stderr)
                 self.history.append(self._to_dict(message)) # Add assistant's message with tool_calls to history
 
-                for tool_call in message.tool_calls:
+                for tool_index, tool_call in enumerate(message.tool_calls):
                     function_name = tool_call.function.name
                     arguments = tool_call.function.arguments
                     call_id = tool_call.id
@@ -376,7 +376,13 @@ class FinAgent:
                     # Truncate result if too long for log, but keep full for LLM
                     # display_result = tool_result[:200] + "..." if len(str(tool_result)) > 200 else tool_result
                     
-                    yield {"type": "tool_result", "tool_name": function_name, "result": str(tool_result)}
+                    yield {
+                        "type": "tool_result",
+                        "tool_name": function_name,
+                        "tool_call_id": call_id,
+                        "tool_index": tool_index,
+                        "result": str(tool_result),
+                    }
 
                     # Append tool result to history
                     self.history.append({
