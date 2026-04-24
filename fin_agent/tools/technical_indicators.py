@@ -81,6 +81,92 @@ def calculate_boll(df, period=20, std_dev=2):
     df['boll_lower'] = df['boll_mid'] - (std * std_dev)
     return df
 
+
+def calculate_atr(df, period=14):
+    """Average True Range (Wilder 风格平滑)."""
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    df["atr"] = tr.ewm(alpha=1.0 / period, adjust=False).mean()
+    return df
+
+
+def calculate_adx_di(df, period=14):
+    """ADX 与 +DI / -DI（日线近似）。"""
+    high = df["high"]
+    low = df["low"]
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.ewm(alpha=1.0 / period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / (atr + 1e-12))
+    minus_di = 100 * (minus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / (atr + 1e-12))
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-12)
+    df["adx"] = dx.ewm(alpha=1.0 / period, adjust=False).mean()
+    df["plus_di"] = plus_di
+    df["minus_di"] = minus_di
+    return df
+
+
+def calculate_cci(df, period=20):
+    """Commodity Channel Index."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    sma_tp = tp.rolling(period).mean()
+    md = tp.rolling(period).apply(
+        lambda x: np.mean(np.abs(x - np.mean(x))),
+        raw=True,
+    )
+    df["cci"] = (tp - sma_tp) / (0.015 * md + 1e-12)
+    return df
+
+
+def calculate_williams_r(df, period=14):
+    """Williams %R，范围约 [-100, 0]。"""
+    highest = df["high"].rolling(period).max()
+    lowest = df["low"].rolling(period).min()
+    df["willr"] = -100.0 * (highest - df["close"]) / (highest - lowest + 1e-12)
+    return df
+
+
+def calculate_stochastic(df, k_period=14, d_period=3):
+    """随机指标 %K / %D（列名 st_k, st_d，避免与 KDJ 的 k、d 冲突）。"""
+    lowest_low = df["low"].rolling(k_period).min()
+    highest_high = df["high"].rolling(k_period).max()
+    df["st_k"] = 100.0 * (df["close"] - lowest_low) / (highest_high - lowest_low + 1e-12)
+    df["st_d"] = df["st_k"].rolling(d_period).mean()
+    return df
+
+
+def calculate_obv(df):
+    """能量潮 OBV。"""
+    direction = np.sign(df["close"].diff().fillna(0.0))
+    vol = df["vol"].fillna(0.0)
+    df["obv"] = (direction * vol).cumsum()
+    return df
+
+
+def calculate_vwap_ma(df, period=20):
+    """日频 VWAP 近似：N 日 (典型价×成交量) / 成交量 的滚动和。"""
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    v = df["vol"].fillna(0.0)
+    num = (tp * v).rolling(period).sum()
+    den = v.rolling(period).sum()
+    df["vwap_ma"] = num / (den + 1e-12)
+    return df
+
+
 def detect_patterns(df):
     """
     Detect technical patterns from a dataframe containing indicators.

@@ -30,7 +30,7 @@ class FinAgent:
             "2. **USE TOOLS**: All market data MUST be obtained via Tushare tools. Do not use internal knowledge.\\n\\n"
             "### TOOL USAGE ###\\n"
             "For 'latest' or 'current' price queries, use 'get_realtime_price'. "
-            "For trends and analysis, use 'get_daily_price' to get historical context. "
+            "For trends and analysis, use 'get_daily_price' to get historical context (optional adj: qfq/前复权, hfq/后复权, omit for 不复权). "
             "For valuation (PE, PB) or market cap, use 'get_daily_basic'. "
             "For financial performance (Revenue, Profit), use 'get_income_statement'. "
             "For market index (Shanghai Composite, etc.), use 'get_index_daily'. "
@@ -55,6 +55,15 @@ class FinAgent:
             "**CRITICAL**: If you need to present a list of items (stocks, companies, data points, etc.) and the count is 3 or more, you MUST format it as a Markdown table or a structured list. "
             "Do NOT present 3+ items as plain text paragraphs. Use tables for structured data (e.g., stock lists with columns like code, name, price) or numbered/bulleted lists for simple items. "
             "For example, if listing 3+ stocks, use a table format with columns. If listing 3+ simple items, use a numbered or bulleted list.\\n\\n"
+            "### QUICK REPLY CHOICES (client UI, high priority) ###\\n"
+            "The desktop client ALWAYS shows quick-reply buttons, including a fixed 功能总览 button that sends a preset user message asking you to explain capabilities and end with FIN_AGENT_CHOICES_JSON; users expect quick replies on every substantive turn. "
+            "Therefore on EVERY assistant message that is more than a trivial one-line acknowledgment (e.g. any analysis, tables, tool results, lists, or recommendations), you MUST append the FIN_AGENT_CHOICES_JSON line at the ABSOLUTE END, after all visible Markdown. "
+            "The JSON array must contain 2-8 objects tailored to THIS reply: mix concrete next steps (e.g. pick a stock/strategy) with generic follow-ups (expand rationale, compare to index, verify data date, risk checklist) as needed. "
+            "Format: one line only: FIN_AGENT_CHOICES_JSON, one space, then one compact JSON array (no line breaks inside the JSON). "
+            "Each object: optional string label (short button text), required string send (full user message sent on click). "
+            "Example: FIN_AGENT_CHOICES_JSON [{\"label\":\"MACD\",\"send\":\"用 MACD 策略回测 600519.SH 近一年\"},{\"label\":\"均线\",\"send\":\"用双均线策略回测 600519.SH 近一年\"}] "
+            "Only omit FIN_AGENT_CHOICES_JSON for ultra-short replies with no follow-up (e.g. a single '好的'). Never put the marker in the middle of the reply. "
+            "If the user message is the preset '功能总览' capability request (asks you to list what you can do and to end with FIN_AGENT_CHOICES_JSON), answer comprehensively in Chinese, then append FIN_AGENT_CHOICES_JSON with 6-8 diverse, concrete example user queries covering major features.\\n\\n"
             "### USER CONTEXT & MEMORY ###\\n"
             "You have access to a long-term memory of the user's investment preferences. "
             "Use the 'update_user_profile' tool to SAVE new preferences when the user explicitly states them or when you infer them (e.g., 'I prefer low risk', 'I only buy tech stocks'). "
@@ -349,13 +358,13 @@ class FinAgent:
                 # print(f"DEBUG: Processing {len(message.tool_calls)} tool calls", file=sys.stderr)
                 self.history.append(self._to_dict(message)) # Add assistant's message with tool_calls to history
 
-                for tool_call in message.tool_calls:
+                for tool_index, tool_call in enumerate(message.tool_calls):
                     function_name = tool_call.function.name
                     arguments = tool_call.function.arguments
                     call_id = tool_call.id
                     
-                    # print(f"DEBUG: Tool Call: {function_name}", file=sys.stderr)
-                    yield {"type": "tool_call", "tool_name": function_name, "args": arguments}
+                    if not Config.LLM_STREAM:
+                        yield {"type": "tool_call", "tool_name": function_name, "args": arguments}
                     
                     # Execute tool
                     try:
@@ -376,7 +385,13 @@ class FinAgent:
                     # Truncate result if too long for log, but keep full for LLM
                     # display_result = tool_result[:200] + "..." if len(str(tool_result)) > 200 else tool_result
                     
-                    yield {"type": "tool_result", "tool_name": function_name, "result": str(tool_result)}
+                    yield {
+                        "type": "tool_result",
+                        "tool_name": function_name,
+                        "tool_call_id": call_id,
+                        "tool_index": tool_index,
+                        "result": str(tool_result),
+                    }
 
                     # Append tool result to history
                     self.history.append({

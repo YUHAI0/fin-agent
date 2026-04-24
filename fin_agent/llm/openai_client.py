@@ -1,6 +1,35 @@
 from openai import OpenAI
 from fin_agent.llm.base import LLMBase
 
+
+def _split_concatenated_json_tool_args(arg_str: str):
+    """
+    部分 OpenAI 兼容接口在并行工具调用时会把多个 JSON 对象拼成一串（如 {...}{...}），
+    若仍只生成一条 tool_call，会导致后端只执行一次、只发一条 tool_result。
+    按最外层花括号切分为多条参数字符串，供拆成多条 ToolCall。
+    """
+    s = (arg_str or "").strip()
+    if not s:
+        return []
+    depth = 0
+    start = None
+    chunks = []
+    for i, c in enumerate(s):
+        if c == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    chunks.append(s[start : i + 1].strip())
+                    start = None
+    if not chunks:
+        return [s]
+    return chunks
+
+
 class OpenAICompatibleClient(LLMBase):
     def __init__(self, api_key, base_url, model, default_headers=None):
         self.client = OpenAI(
@@ -167,20 +196,55 @@ class OpenAICompatibleClient(LLMBase):
             
             final_tool_calls = []
             if collected_tool_calls:
-                # Sort by index to ensure order
-                sorted_indices = sorted(collected_tool_calls.keys())
+                # Sort by index；兼容 index 为 None（避免 int 与 None 比较报错）
+                def _tool_call_sort_key(idx):
+                    if idx is None:
+                        return (1, 0)
+                    if isinstance(idx, int):
+                        return (0, idx)
+                    try:
+                        return (0, int(idx))
+                    except (TypeError, ValueError):
+                        return (1, 0)
+
+                sorted_indices = sorted(collected_tool_calls.keys(), key=_tool_call_sort_key)
                 for index in sorted_indices:
                     tc_data = collected_tool_calls[index]
-                    final_tool_calls.append(
-                        ToolCall(
-                            id=tc_data["id"],
-                            type="function",
-                            function=Function(
-                                name=tc_data["name"],
-                                arguments=tc_data["arguments"]
+                    arg_str = tc_data.get("arguments") or ""
+                    name = (tc_data.get("name") or "").strip()
+                    base_id = (tc_data.get("id") or "").strip() or f"call_{index}"
+                    parts = _split_concatenated_json_tool_args(arg_str)
+                    if len(parts) <= 1:
+                        final_tool_calls.append(
+                            ToolCall(
+                                id=base_id,
+                                type="function",
+                                function=Function(
+                                    name=name,
+                                    arguments=arg_str,
+                                ),
                             )
                         )
-                    )
+                    else:
+                        # 少数网关会把函数名也重复拼接，与参数段数对齐时还原为单段
+                        eff_name = name
+                        if eff_name and len(eff_name) % len(parts) == 0:
+                            step = len(eff_name) // len(parts)
+                            seg = eff_name[:step]
+                            if seg * len(parts) == eff_name:
+                                eff_name = seg
+                        for j, part in enumerate(parts):
+                            tid = f"{base_id}:{j}" if base_id else f"call_{index}_{j}"
+                            final_tool_calls.append(
+                                ToolCall(
+                                    id=tid,
+                                    type="function",
+                                    function=Function(
+                                        name=eff_name,
+                                        arguments=part,
+                                    ),
+                                )
+                            )
             
             final_message = Message(
                 role="assistant",
