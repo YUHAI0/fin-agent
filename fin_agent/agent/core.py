@@ -462,12 +462,13 @@ class FinAgent:
                     
                     name = event['tool_name']
                     args = event['args']
-                    print(f"\n{Fore.CYAN}Calling Tool: {name} with args: {args}{Style.RESET_ALL}")
+                    print(f"\n{Fore.CYAN}Calling Tool: {name}{Style.RESET_ALL}")
                     if callback: callback('tool_call', {"name": name, "args": args})
 
                 elif event_type == 'tool_result':
                     result = event['result']
-                    display_result = result[:200] + "..." if len(result) > 200 else result
+                    compact = " ".join(str(result).split())
+                    display_result = compact[:120] + "..." if len(compact) > 120 else compact
                     print(f"{Fore.BLUE}Tool Result: {display_result}{Style.RESET_ALL}")
                     if callback: callback('tool_result', {"name": event['tool_name'], "result": result})
 
