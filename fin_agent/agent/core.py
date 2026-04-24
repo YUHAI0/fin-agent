@@ -362,9 +362,8 @@ class FinAgent:
                     function_name = tool_call.function.name
                     arguments = tool_call.function.arguments
                     call_id = tool_call.id
-                    
-                    if not Config.LLM_STREAM:
-                        yield {"type": "tool_call", "tool_name": function_name, "args": arguments}
+                    # CLI run() depends on this; streaming already emitted tool_call_chunk for the GUI.
+                    yield {"type": "tool_call", "tool_name": function_name, "args": arguments}
                     
                     # Execute tool
                     try:
@@ -449,19 +448,73 @@ class FinAgent:
         generator = self.stream_chat(user_input)
         
         final_answer = ""
-        
+
+        # Filter out the FIN_AGENT_CHOICES_JSON marker line intended only for the
+        # desktop client's quick-reply parser. CLI users should not see this.
+        choices_marker = "FIN_AGENT_CHOICES_JSON"
+        content_filter_buf = ""
+        choices_suppressed = False
+
+        def filter_content_chunk(text):
+            nonlocal content_filter_buf, choices_suppressed
+            if choices_suppressed:
+                return ""
+            content_filter_buf += text
+            idx = content_filter_buf.find(choices_marker)
+            if idx != -1:
+                out = content_filter_buf[:idx].rstrip()
+                content_filter_buf = ""
+                choices_suppressed = True
+                return out
+            # Hold back a tail that could still become the marker when more chunks arrive.
+            max_tail = min(len(choices_marker) - 1, len(content_filter_buf))
+            hold = 0
+            for length in range(max_tail, 0, -1):
+                if choices_marker.startswith(content_filter_buf[-length:]):
+                    hold = length
+                    break
+            if hold == 0:
+                out = content_filter_buf
+                content_filter_buf = ""
+                return out
+            out = content_filter_buf[:-hold]
+            content_filter_buf = content_filter_buf[-hold:]
+            return out
+
+        def flush_content_filter():
+            nonlocal content_filter_buf
+            if choices_suppressed:
+                content_filter_buf = ""
+                return ""
+            out = content_filter_buf
+            content_filter_buf = ""
+            return out
+
+        # Thinking is printed to the raw terminal; reset styles before normal content / tools
+        # so output order does not look glued or color-bleed into the next block.
+        thinking_pending_reset = False
+
         try:
             for event in generator:
                 event_type = event['type']
                 
                 if event_type == 'content':
+                    if thinking_pending_reset:
+                        print(Style.RESET_ALL, end="", flush=True)
+                        thinking_pending_reset = False
                     content = event['content']
-                    update_md(content)
+                    visible = filter_content_chunk(content)
+                    if visible:
+                        update_md(visible)
                     if callback: callback('content', content)
                     
                 elif event_type == 'thinking':
                     content = event['content']
+                    tail = flush_content_filter()
+                    if tail:
+                        update_md(tail)
                     stop_md()
+                    thinking_pending_reset = True
                     print(f"{Style.DIM}{Fore.YELLOW}{content}", end="", flush=True)
                     # We might need to handle resetting color after thinking block ends
                     # The generator stream separates thinking chunks. 
@@ -471,9 +524,12 @@ class FinAgent:
                     pass 
                     
                 elif event_type == 'tool_call':
+                    tail = flush_content_filter()
+                    if tail:
+                        update_md(tail)
                     stop_md()
-                    # If we were thinking, reset color
-                    print(Style.RESET_ALL, end="", flush=True) 
+                    print(Style.RESET_ALL, end="", flush=True)
+                    thinking_pending_reset = False
                     
                     name = event['tool_name']
                     args = event['args']
@@ -481,10 +537,13 @@ class FinAgent:
                     if callback: callback('tool_call', {"name": name, "args": args})
 
                 elif event_type == 'tool_result':
+                    if thinking_pending_reset:
+                        print(Style.RESET_ALL, end="", flush=True)
+                        thinking_pending_reset = False
                     result = event['result']
                     compact = " ".join(str(result).split())
                     display_result = compact[:120] + "..." if len(compact) > 120 else compact
-                    print(f"{Fore.BLUE}Tool Result: {display_result}{Style.RESET_ALL}")
+                    print(f"\n{Fore.BLUE}Tool Result: {display_result}{Style.RESET_ALL}")
                     if callback: callback('tool_result', {"name": event['tool_name'], "result": result})
 
                 elif event_type == 'error':
@@ -494,7 +553,13 @@ class FinAgent:
                     return event['content']
 
                 elif event_type == 'answer':
-                    final_answer = event['content']
+                    tail = flush_content_filter()
+                    if tail:
+                        update_md(tail)
+                    answer_text = event['content']
+                    if choices_marker in answer_text:
+                        answer_text = answer_text.split(choices_marker, 1)[0].rstrip()
+                    final_answer = answer_text
             
             stop_md()
             print(Style.RESET_ALL) # Ensure reset at end
