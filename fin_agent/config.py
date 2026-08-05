@@ -22,6 +22,9 @@ class Config:
     
     # App Config
     WAKE_UP_SHORTCUT = None
+    DATA_SOURCE = "akshare"
+    ALERT_POLL_INTERVAL_MINUTES = 10
+    ALERT_TRADING_HOURS_ONLY = True
     
     # Email Config
     EMAIL_SMTP_SERVER = None
@@ -118,6 +121,17 @@ class Config:
         # Load app config
         app_config = cls.load_app_config()
         cls.WAKE_UP_SHORTCUT = app_config.get("wake_up_shortcut")
+        cls.DATA_SOURCE = app_config.get("data_source", "akshare")
+        if cls.DATA_SOURCE not in ("akshare", "tushare"):
+            cls.DATA_SOURCE = "akshare"
+
+        try:
+            interval = int(app_config.get("alert_poll_interval_minutes", 10))
+        except (TypeError, ValueError):
+            interval = 10
+        cls.ALERT_POLL_INTERVAL_MINUTES = min(max(interval, 1), 120)
+
+        cls.ALERT_TRADING_HOURS_ONLY = bool(app_config.get("alert_trading_hours_only", True))
         
         # Fallback to env if not in json (migration)
         if not cls.WAKE_UP_SHORTCUT:
@@ -284,6 +298,26 @@ class Config:
             os.environ["OPENAI_MODEL"] = openai_model
             
         cls.load()
+
+    @classmethod
+    def update_app_settings(cls, data_source, alert_poll_interval_minutes, alert_trading_hours_only):
+        """更新行为类配置（非密钥），写入 app_config.json。"""
+        if data_source not in ("akshare", "tushare"):
+            data_source = "akshare"
+        try:
+            interval = int(alert_poll_interval_minutes)
+        except (TypeError, ValueError):
+            interval = 10
+        interval = min(max(interval, 1), 120)
+
+        cls.save_app_config({
+            "data_source": data_source,
+            "alert_poll_interval_minutes": interval,
+            "alert_trading_hours_only": bool(alert_trading_hours_only)
+        })
+        cls.DATA_SOURCE = data_source
+        cls.ALERT_POLL_INTERVAL_MINUTES = interval
+        cls.ALERT_TRADING_HOURS_ONLY = bool(alert_trading_hours_only)
 
     @classmethod
     def setup(cls):
