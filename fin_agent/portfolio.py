@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 from io import StringIO
@@ -6,31 +7,86 @@ import pandas as pd
 from fin_agent.config import Config
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
+DEFAULT_PORTFOLIO_ID = "default"
+DEFAULT_PORTFOLIO_NAME = "默认组合"
+SCHEMA_VERSION = 2
+
+
 class PortfolioManager:
     def __init__(self, file_path: str = None):
         if file_path:
             self.file_path = file_path
         else:
-            # Default to user config directory (same as .env)
             config_dir = Config.get_config_dir()
-            # Ensure directory exists
             os.makedirs(config_dir, exist_ok=True)
             self.file_path = os.path.join(config_dir, "portfolio.json")
-            
-        self.holdings = self._load_portfolio()
 
-    def _load_portfolio(self) -> Dict:
+        self.data = self._load_portfolio()
+
+    def _empty(self):
+        return {
+            "version": SCHEMA_VERSION,
+            "active_portfolio_id": DEFAULT_PORTFOLIO_ID,
+            "portfolios": {
+                DEFAULT_PORTFOLIO_ID: {
+                    "name": DEFAULT_PORTFOLIO_NAME,
+                    "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "positions": {},
+                }
+            },
+        }
+
+    def _migrate(self, raw):
+        """v1（顶层 positions）→ v2（多组合）。旧持仓包装进默认组合，字段原样保留。"""
+        migrated = self._empty()
+        positions = raw.get("positions") or {}
+        for ts_code, item in positions.items():
+            migrated["portfolios"][DEFAULT_PORTFOLIO_ID]["positions"][ts_code] = {
+                "amount": item.get("amount", 0),
+                "cost": item.get("cost", 0.0),
+                "bought_at": item.get("bought_at", ""),
+                "note": item.get("note", ""),
+            }
+        return migrated
+
+    def _load_portfolio(self):
         if not os.path.exists(self.file_path):
-            return {"positions": {}}
+            return self._empty()
         try:
-            with open(self.file_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            with open(self.file_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
         except Exception:
-            return {"positions": {}}
+            return self._empty()
+
+        if not isinstance(raw, dict):
+            return self._empty()
+
+        if raw.get("version") == SCHEMA_VERSION and "portfolios" in raw:
+            return raw
+
+        migrated = self._migrate(raw)
+        self.data = migrated
+        self._save_portfolio()
+        return migrated
 
     def _save_portfolio(self):
-        with open(self.file_path, 'w', encoding='utf-8') as f:
-            json.dump(self.holdings, f, ensure_ascii=False, indent=2)
+        with open(self.file_path, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, indent=2)
+
+    def _resolve(self, portfolio_id=None):
+        """按 id 或名称定位组合；不传则用当前活动组合。"""
+        portfolios = self.data.get("portfolios", {})
+        if not portfolio_id:
+            portfolio_id = self.data.get("active_portfolio_id") or DEFAULT_PORTFOLIO_ID
+
+        if portfolio_id in portfolios:
+            return portfolio_id, portfolios[portfolio_id]
+
+        for pid, portfolio in portfolios.items():
+            if portfolio.get("name") == portfolio_id:
+                return pid, portfolio
+
+        raise ValueError(f"找不到组合：{portfolio_id}")
 
     def add_position(self, ts_code: str, amount: int, price: float):
         """
