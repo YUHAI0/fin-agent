@@ -122,39 +122,27 @@ class FinAgent:
             "tool_calls": getattr(message, "tool_calls", None)
         }
 
+    # CLI 使用的固定会话 id，与多标签会话共用同一套存储
+    CLI_SESSION_ID = "cli-last-session"
+
     def save_session(self, filename="last_session.json"):
-        """Save current session history to file."""
-        config_dir = Config.get_config_dir()
-        filepath = os.path.join(config_dir, "sessions", filename)
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=2)
-            return f"Session saved to {filepath}"
-        except Exception as e:
-            return f"Error saving session: {e}"
+        """保存当前上下文。保留 filename 参数以兼容 CLI 调用。"""
+        from fin_agent import session_store
+        session_store.save_llm_history(self.CLI_SESSION_ID, self.history)
+        return f"Session saved to {session_store.sessions_dir()}"
 
     def load_session(self, filename="last_session.json"):
-        """Load session history from file."""
-        config_dir = Config.get_config_dir()
-        filepath = os.path.join(config_dir, "sessions", filename)
-        
-        if not os.path.exists(filepath):
-            return "No saved session found."
-            
+        """载入 CLI 会话上下文。保留 filename 参数以兼容 CLI 调用。"""
+        from fin_agent import session_store
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                self.history = json.load(f)
-            # Ensure we update the system prompt part of the loaded history to reflect latest code/profile?
-            # Or trust the saved one? Usually, we want the LATEST profile in system prompt.
-            # Let's update the first message if it is 'system'
-            if self.history and self.history[0].get('role') == 'system':
-                self.history[0]['content'] = self._get_system_content()
-                
-            return f"Session loaded from {filepath}"
-        except Exception as e:
-            return f"Error loading session: {e}"
+            body = session_store.get_session(self.CLI_SESSION_ID)
+        except KeyError:
+            return "No saved session found."
+        history = body.get("llm_history") or []
+        if not history:
+            return "No saved session found."
+        self.history = history
+        return "Session loaded."
 
     def clear_history(self):
         """Clear conversation history (keep system prompt)."""
