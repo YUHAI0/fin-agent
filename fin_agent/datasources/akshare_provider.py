@@ -111,12 +111,25 @@ class AkshareProvider(MarketDataProvider):
     def get_daily_basic(self, ts_code, start_date=None, end_date=None):
         self.require(CAP_DAILY_BASIC)
         full = to_ts_code(ts_code)
-        df = ak.stock_a_indicator_lg(symbol=to_plain_code(full))
+        # stock_a_indicator_lg 已随乐咕数据源下线；东财 stock_value_em 提供日频估值序列
+        df = ak.stock_value_em(symbol=to_plain_code(full))
+        mapping = {
+            "数据日期": "trade_date",
+            "PE(静)": "pe",
+            "PE(TTM)": "pe_ttm",
+            "市净率": "pb",
+            "市销率": "ps_ttm",
+            "总市值": "total_mv",
+            "流通市值": "circ_mv",
+        }
         columns = ["ts_code", "trade_date", "pe", "pe_ttm", "pb", "ps_ttm", "dv_ratio", "total_mv", "circ_mv"]
-        out = rename_and_select(df, {}, columns)
+        out = rename_and_select(df, mapping, columns)
         if len(out):
             out["ts_code"] = full
             out["trade_date"] = out["trade_date"].apply(normalize_date)
+            # 东财市值为元，Tushare 风格统一为万元
+            out["total_mv"] = out["total_mv"].apply(lambda v: None if v is None else float(v) / 10000.0)
+            out["circ_mv"] = out["circ_mv"].apply(lambda v: None if v is None else float(v) / 10000.0)
             start = normalize_date(start_date)
             end = normalize_date(end_date)
             if start:
