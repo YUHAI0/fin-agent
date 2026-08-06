@@ -147,7 +147,8 @@ class Config:
     def validate(cls):
         cls.load() # Ensure latest env is loaded
         missing = []
-        if not cls.TUSHARE_TOKEN:
+        # akshare 无需 token，只有显式选择 tushare 作为数据源时才强制要求
+        if cls.DATA_SOURCE == "tushare" and not cls.TUSHARE_TOKEN:
             missing.append("TUSHARE_TOKEN")
             
         if cls.LLM_PROVIDER == "deepseek":
