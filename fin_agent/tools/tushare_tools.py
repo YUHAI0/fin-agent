@@ -25,6 +25,8 @@ from fin_agent.tools.profile_tools import (
     update_user_profile,
     get_user_profile
 )
+from fin_agent.tools.market_tools import requires_tushare
+from fin_agent.tools import market_tools
 
 # Initialize Tushare - will be re-initialized when called if Config updates
 def get_pro():
@@ -60,156 +62,7 @@ def get_current_time():
     now = datetime.now()
     return now.strftime("%Y-%m-%d %H:%M:%S")
 
-def get_stock_basic(ts_code=None, name=None):
-    """
-    Get basic stock information.
-    :param ts_code: Stock code (e.g., 000001.SZ)
-    :param name: Stock name (e.g., 平安银行)
-    :return: DataFrame or dict string
-    """
-    try:
-        pro = get_pro()
-        # If name is provided but ts_code is not, try to find ts_code
-        if name and not ts_code:
-            # Getting all stocks and filtering might be slow, but it's a simple way
-            df = pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
-            df = df[df['name'] == name]
-            if df.empty:
-                return f"Error: Stock with name '{name}' not found."
-            return df.to_json(orient='records', force_ascii=False)
-        
-        # Otherwise use ts_code or just list all (limit to some reasonable amount if needed, but pro.stock_basic returns all usually)
-        # To be safe for LLM, usually we query by specific code or just return error if both missing
-        if not ts_code:
-             return "Error: Please provide either ts_code or name."
-
-        df = pro.stock_basic(ts_code=ts_code, fields='ts_code,symbol,name,area,industry,list_date')
-        if df.empty:
-            return f"Error: Stock code '{ts_code}' not found."
-        return df.to_json(orient='records', force_ascii=False)
-    except Exception as e:
-        return f"Error fetching stock basic info: {str(e)}"
-
-def get_daily_price(ts_code, start_date=None, end_date=None, adj=None):
-    """
-    Get daily stock price (A 股日线).
-    :param ts_code: Stock code
-    :param start_date: Start date (YYYYMMDD)
-    :param end_date: End date (YYYYMMDD)
-    :param adj: Optional 复权. None/omit/不复权: 未复权 (pro.daily).
-                 'qfq' 或 前复权: 前复权 (ts.pro_bar)；'hfq' 或 后复权: 后复权 (ts.pro_bar)。
-    :return: JSON string
-    """
-    if not start_date:
-        # Default to last 30 days
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
-    if not end_date:
-        end_date = datetime.now().strftime('%Y%m%d')
-
-    adj_mode, adj_err = _parse_daily_adj(adj)
-    if adj_err:
-        return adj_err
-
-    try:
-        pro = get_pro()
-        if adj_mode is None:
-            df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
-        else:
-            df = ts.pro_bar(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-                adj=adj_mode,
-            )
-        if df is None or df.empty:
-            return f"No data found for {ts_code} between {start_date} and {end_date}."
-        
-        # Ensure data is sorted by date descending
-        df = df.sort_values('trade_date', ascending=False)
-        return df.to_json(orient='records', force_ascii=False)
-    except Exception as e:
-        return f"Error fetching daily price: {str(e)}"
-
-def get_realtime_price(ts_code):
-    """
-    Get realtime stock price using legacy Tushare interface.
-    :param ts_code: Stock code (e.g., 000001.SZ -> 000001 for legacy)
-    :return: JSON string
-    """
-    try:
-        # Legacy interface takes code without suffix usually, but let's check input
-        code = ts_code.split('.')[0] if '.' in ts_code else ts_code
-        
-        df = ts.get_realtime_quotes(code)
-        if df is None or df.empty:
-            return f"No realtime data found for {ts_code}."
-            
-        # Add ts_code back for clarity
-        df['ts_code'] = ts_code
-        return df.to_json(orient='records', force_ascii=False)
-    except Exception as e:
-        return f"Error fetching realtime price: {str(e)}"
-
-def get_daily_basic(ts_code, start_date=None, end_date=None):
-    """
-    Get daily basic indicators (PE, PB, turnover, etc.).
-    """
-    if not start_date:
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
-    if not end_date:
-        end_date = datetime.now().strftime('%Y%m%d')
-        
-    try:
-        pro = get_pro()
-        df = pro.daily_basic(ts_code=ts_code, start_date=start_date, end_date=end_date, 
-                            fields='ts_code,trade_date,close,turnover_rate,volume_ratio,pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,total_share,float_share,free_share,total_mv,circ_mv')
-        if df.empty:
-             return f"No daily basic data found for {ts_code}."
-        df = df.sort_values('trade_date', ascending=False)
-        return df.to_json(orient='records', force_ascii=False)
-    except Exception as e:
-        return f"Error fetching daily basic info: {str(e)}"
-
-def get_income_statement(ts_code, start_date=None, end_date=None):
-    """
-    Get income statement data (Revenue, Profit).
-    """
-    if not start_date:
-        # Last 2 years
-        start_date = (datetime.now() - timedelta(days=730)).strftime('%Y%m%d')
-    if not end_date:
-        end_date = datetime.now().strftime('%Y%m%d')
-        
-    try:
-        pro = get_pro()
-        df = pro.income(ts_code=ts_code, start_date=start_date, end_date=end_date,
-                       fields='ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,total_revenue,revenue,total_profit,n_income,n_income_attr_p')
-        if df.empty:
-            return f"No income statement data found for {ts_code}."
-        df = df.sort_values('end_date', ascending=False)
-        return df.to_json(orient='records', force_ascii=False)
-    except Exception as e:
-        return f"Error fetching income statement: {str(e)}"
-
-def get_index_daily(ts_code, start_date=None, end_date=None):
-    """
-    Get daily index market data (e.g. 000001.SH, 399001.SZ).
-    """
-    if not start_date:
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
-    if not end_date:
-        end_date = datetime.now().strftime('%Y%m%d')
-    
-    try:
-        pro = get_pro()
-        df = pro.index_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
-        if df.empty:
-            return f"No index data found for {ts_code}."
-        df = df.sort_values('trade_date', ascending=False)
-        return df.to_json(orient='records', force_ascii=False)
-    except Exception as e:
-        return f"Error fetching index daily: {str(e)}"
-
+@requires_tushare
 def get_moneyflow(ts_code, start_date=None, end_date=None):
     """
     Get stock money flow (buy/sell volume by order size).
@@ -250,6 +103,7 @@ def get_hsgt_top10(trade_date=None):
     except Exception as e:
         return f"Error fetching HSGT top 10: {str(e)}"
 
+@requires_tushare
 def get_limit_list(trade_date=None):
     """
     Get daily limit up/down list.
@@ -266,6 +120,7 @@ def get_limit_list(trade_date=None):
     except Exception as e:
         return f"Error fetching limit list: {str(e)}"
 
+@requires_tushare
 def get_top_list(trade_date=None):
     """
     Get daily dragon and tiger list.
@@ -282,6 +137,7 @@ def get_top_list(trade_date=None):
     except Exception as e:
         return f"Error fetching top list: {str(e)}"
 
+@requires_tushare
 def get_forecast(ts_code, start_date=None, end_date=None):
     """
     Get financial forecast.
@@ -301,6 +157,7 @@ def get_forecast(ts_code, start_date=None, end_date=None):
     except Exception as e:
         return f"Error fetching forecast: {str(e)}"
 
+@requires_tushare
 def get_concept_detail(concept_name=None, ts_code=None):
     """
     Get stocks in a concept or concepts of a stock.
@@ -351,6 +208,7 @@ def get_concept_detail(concept_name=None, ts_code=None):
     except Exception as e:
         return f"Error fetching concept detail: {str(e)}"
 
+@requires_tushare
 def get_long_tail_stocks(min_mv=10, max_mv=200, max_pe=40, max_pb=5, 
                         max_turnover=3.0, check_consolidation=False, 
                         check_volume_spike=False, limit=20):
@@ -476,6 +334,7 @@ def get_long_tail_stocks(min_mv=10, max_mv=200, max_pe=40, max_pb=5,
     except Exception as e:
         return f"Error executing long-tail stock discovery: {str(e)}"
 
+@requires_tushare
 def screen_stocks(pe_min=None, pe_max=None, pb_min=None, pb_max=None, 
                   mv_min=None, mv_max=None, dv_min=None, 
                   turnover_min=None, turnover_max=None,
@@ -629,6 +488,7 @@ def reset_core_config():
     except Exception as e:
         return f"Error resetting core config: {str(e)}"
 
+@requires_tushare
 def get_hk_stock_basic(ts_code=None, name=None):
     """
     Get basic information about a Hong Kong stock.
@@ -656,6 +516,7 @@ def get_hk_stock_basic(ts_code=None, name=None):
     except Exception as e:
         return f"Error fetching Hong Kong stock basic info: {str(e)}"
 
+@requires_tushare
 def get_hk_daily_price(ts_code, start_date=None, end_date=None):
     """
     Get daily Hong Kong stock price.
@@ -682,6 +543,7 @@ def get_hk_daily_price(ts_code, start_date=None, end_date=None):
     except Exception as e:
         return f"Error fetching Hong Kong stock daily price: {str(e)}"
 
+@requires_tushare
 def get_us_stock_basic(ts_code=None, name=None):
     """
     Get basic information about a US stock.
@@ -709,6 +571,7 @@ def get_us_stock_basic(ts_code=None, name=None):
     except Exception as e:
         return f"Error fetching US stock basic info: {str(e)}"
 
+@requires_tushare
 def get_us_daily_price(ts_code, start_date=None, end_date=None):
     """
     Get daily US stock price.
@@ -735,6 +598,7 @@ def get_us_daily_price(ts_code, start_date=None, end_date=None):
     except Exception as e:
         return f"Error fetching US stock daily price: {str(e)}"
 
+@requires_tushare
 def get_hk_realtime_price(ts_code):
     """
     Get realtime Hong Kong stock price.
@@ -776,6 +640,7 @@ def get_hk_realtime_price(ts_code):
     except Exception as e:
         return f"Error fetching Hong Kong stock realtime price: {str(e)}"
 
+@requires_tushare
 def get_us_realtime_price(ts_code):
     """
     Get realtime US stock price.
@@ -817,6 +682,7 @@ def get_us_realtime_price(ts_code):
     except Exception as e:
         return f"Error fetching US stock realtime price: {str(e)}"
 
+@requires_tushare
 def get_etf_basic(ts_code=None, name=None):
     """
     Get basic information about an ETF.
@@ -843,6 +709,7 @@ def get_etf_basic(ts_code=None, name=None):
     except Exception as e:
         return f"Error fetching ETF basic info: {str(e)}"
 
+@requires_tushare
 def get_etf_daily_price(ts_code, start_date=None, end_date=None):
     """
     Get daily ETF price.
@@ -867,6 +734,7 @@ def get_etf_daily_price(ts_code, start_date=None, end_date=None):
     except Exception as e:
         return f"Error fetching ETF daily price: {str(e)}"
 
+@requires_tushare
 def get_cb_basic(ts_code=None, name=None):
     """
     Get basic information about a convertible bond (可转债).
@@ -893,6 +761,7 @@ def get_cb_basic(ts_code=None, name=None):
     except Exception as e:
         return f"Error fetching convertible bond basic info: {str(e)}"
 
+@requires_tushare
 def get_cb_daily_price(ts_code, start_date=None, end_date=None):
     """
     Get daily convertible bond price.
@@ -917,6 +786,7 @@ def get_cb_daily_price(ts_code, start_date=None, end_date=None):
     except Exception as e:
         return f"Error fetching convertible bond daily price: {str(e)}"
 
+@requires_tushare
 def get_futures_basic(ts_code=None, exchange=None, name=None):
     """
     Get basic information about a futures contract.
@@ -944,6 +814,7 @@ def get_futures_basic(ts_code=None, exchange=None, name=None):
     except Exception as e:
         return f"Error fetching futures basic info: {str(e)}"
 
+@requires_tushare
 def get_futures_daily_price(ts_code, start_date=None, end_date=None, exchange=None):
     """
     Get daily futures price.
@@ -969,6 +840,7 @@ def get_futures_daily_price(ts_code, start_date=None, end_date=None, exchange=No
     except Exception as e:
         return f"Error fetching futures daily price: {str(e)}"
 
+@requires_tushare
 def get_macro_gdp(period=None, start_period=None, end_period=None):
     """
     Get GDP (Gross Domestic Product) macroeconomic data.
@@ -1068,6 +940,7 @@ def get_macro_gdp(period=None, start_period=None, end_period=None):
         error_detail = traceback.format_exc()
         return f"Error fetching GDP data: {str(e)}\nDetails: {error_detail[:200]}"
 
+@requires_tushare
 def get_macro_cpi(period=None, start_period=None, end_period=None):
     """
     Get CPI (Consumer Price Index) macroeconomic data.
@@ -1142,6 +1015,7 @@ def get_macro_m2(period=None, start_period=None, end_period=None):
     except Exception as e:
         return f"Error fetching M2 data: {str(e)}"
 
+@requires_tushare
 def get_macro_interest_rate(period=None, start_period=None, end_period=None):
     """
     Get interest rate data (SHIBOR - Shanghai Interbank Offered Rate).
@@ -1178,6 +1052,7 @@ def get_macro_interest_rate(period=None, start_period=None, end_period=None):
     except Exception as e:
         return f"Error fetching interest rate data: {str(e)}"
 
+@requires_tushare
 def get_global_index_comparison(indices=None):
     """
     Compare global market indices.
@@ -2075,17 +1950,17 @@ def execute_tool_call(tool_name, arguments):
     if tool_name == "get_current_time":
         return get_current_time()
     elif tool_name == "get_stock_basic":
-        return get_stock_basic(**arguments)
+        return market_tools.get_stock_basic(**arguments)
     elif tool_name == "get_daily_price":
-        return get_daily_price(**arguments)
+        return market_tools.get_daily_price(**arguments)
     elif tool_name == "get_realtime_price":
-        return get_realtime_price(**arguments)
+        return market_tools.get_realtime_price(**arguments)
     elif tool_name == "get_daily_basic":
-        return get_daily_basic(**arguments)
+        return market_tools.get_daily_basic(**arguments)
     elif tool_name == "get_income_statement":
-        return get_income_statement(**arguments)
+        return market_tools.get_income_statement(**arguments)
     elif tool_name == "get_index_daily":
-        return get_index_daily(**arguments)
+        return market_tools.get_index_daily(**arguments)
     elif tool_name == "get_hk_stock_basic":
         return get_hk_stock_basic(**arguments)
     elif tool_name == "get_hk_daily_price":
