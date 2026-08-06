@@ -82,6 +82,7 @@ def get_moneyflow(ts_code, start_date=None, end_date=None):
     except Exception as e:
         return f"Error fetching money flow (check permission/points): {str(e)}"
 
+@requires_tushare
 def get_hsgt_top10(trade_date=None):
     """
     Get Northbound/Southbound top 10 turnover.
@@ -978,6 +979,7 @@ def get_macro_cpi(period=None, start_period=None, end_period=None):
     except Exception as e:
         return f"Error fetching CPI data: {str(e)}"
 
+@requires_tushare
 def get_macro_m2(period=None, start_period=None, end_period=None):
     """
     Get M2 money supply macroeconomic data.
