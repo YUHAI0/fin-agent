@@ -1,5 +1,5 @@
 import time
-import schedule
+import datetime
 import threading
 import json
 import os
@@ -14,6 +14,53 @@ import logging
 import platform
 
 logger = logging.getLogger(__name__)
+
+# 全局唯一的调度线程与停止信号。init_agent() 会被重复调用，
+# 必须在模块级去重，实例级的 _started 无法阻止重复启动。
+_SCHEDULER_THREAD = None
+_SCHEDULER_STOP = threading.Event()
+_SCHEDULER_LOCK = threading.Lock()
+
+# 交易日历缓存：{"date": "YYYYMMDD", "open_days": set()}
+_CALENDAR_CACHE = {"date": None, "open_days": set()}
+
+# A 股交易时段，含集合竞价与收盘缓冲
+_TRADING_WINDOWS = (
+    (datetime.time(9, 15), datetime.time(11, 30)),
+    (datetime.time(12, 55), datetime.time(15, 5)),
+)
+
+
+def _is_trading_day(today_str):
+    """借助数据源的交易日历判断是否交易日，按天缓存；失败则退化为工作日判断。"""
+    if _CALENDAR_CACHE["date"] == today_str:
+        return today_str in _CALENDAR_CACHE["open_days"]
+
+    try:
+        from fin_agent.datasources import get_provider
+        df = get_provider().get_trade_calendar(today_str, today_str)
+        open_days = set(df["cal_date"].astype(str).tolist())
+        _CALENDAR_CACHE["date"] = today_str
+        _CALENDAR_CACHE["open_days"] = open_days
+        return today_str in open_days
+    except Exception as e:
+        logger.warning(f"Trade calendar unavailable, fallback to weekday check: {e}")
+        return datetime.datetime.strptime(today_str, "%Y%m%d").weekday() < 5
+
+
+def is_trading_now():
+    """当前是否处于 A 股交易时段。"""
+    now = datetime.datetime.now()
+    if not _is_trading_day(now.strftime("%Y%m%d")):
+        return False
+    current = now.time()
+    return any(start <= current <= end for start, end in _TRADING_WINDOWS)
+
+
+def stop_scheduler():
+    """通知调度线程退出。"""
+    _SCHEDULER_STOP.set()
+
 
 class TaskScheduler:
     _instance = None
@@ -299,39 +346,37 @@ class TaskScheduler:
             else:
                 logger.error(f"Error checking task {task['id']}: {e}")
 
-    def run_scheduler(self, cycle=10):
-        # Schedule the check every cycle minutes
-        # For stricter timing, we could do every 10 seconds, but Tushare has rate limits.
-        # Default is 10 minutes.
-        schedule.every(cycle).minutes.do(self.check_conditions)
-        
+    def run_scheduler(self, cycle=None):
+        """轮询循环。间隔与交易时段开关每轮从配置读取，改动下一周期即生效。"""
         last_heartbeat = 0
-        
-        while True:
+        timeout = 0
+
+        while not _SCHEDULER_STOP.wait(timeout):
             try:
-                # In worker mode, ensure PID file exists (restore if deleted by others)
-                # AND update modification time as a heartbeat
                 if self.verbose:
                     current_time = time.time()
-                    if current_time - last_heartbeat > 5: # Every 5 seconds
+                    if current_time - last_heartbeat > 5:
                         try:
                             if not os.path.exists(self.pid_file):
                                 with open(self.pid_file, 'w') as f:
                                     f.write(str(os.getpid()))
                                 logger.warning("Restored missing PID file.")
                             else:
-                                # Update mtime to indicate liveness
                                 os.utime(self.pid_file, None)
-                            
                             last_heartbeat = current_time
                         except Exception as e:
                             logger.error(f"Failed to update PID file heartbeat: {e}")
 
-                schedule.run_pending()
-                time.sleep(1)
+                Config.load()
+                if not Config.ALERT_TRADING_HOURS_ONLY or is_trading_now():
+                    self.check_conditions()
+                else:
+                    logger.debug("Outside trading hours, skip this cycle.")
+
+                timeout = max(int(Config.ALERT_POLL_INTERVAL_MINUTES), 1) * 60
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
-                time.sleep(5)
+                timeout = 60
 
     def _is_worker_running(self):
         """Check if a worker process is running using PID file heartbeat."""
@@ -409,23 +454,20 @@ class TaskScheduler:
             return False
 
     def start(self):
-        """
-        Start the scheduler in a background thread.
-        Will NOT start if a worker process is detected via PID file.
-        """
-        if self._started:
-            return
+        """启动后台调度线程。全局至多一个，重复调用直接返回。"""
+        global _SCHEDULER_THREAD
 
-        if self._is_worker_running():
-            # In interactive mode, we don't want to print to stdout as it might interfere with TUI
-            # But fin-agent is CLI based, so print is fine.
-            # print(f"[{time.strftime('%H:%M:%S')}] Detected active Worker process. Interactive scheduler disabled to avoid duplicates.")
-            return
+        with _SCHEDULER_LOCK:
+            if _SCHEDULER_THREAD is not None and _SCHEDULER_THREAD.is_alive():
+                return
 
-        t = threading.Thread(target=self.run_scheduler, args=(10,), daemon=True)
-        t.start()
-        self._started = True
-        # print("Background scheduler started.") 
+            if self._is_worker_running():
+                return
+
+            _SCHEDULER_STOP.clear()
+            _SCHEDULER_THREAD = threading.Thread(target=self.run_scheduler, daemon=True)
+            _SCHEDULER_THREAD.start()
+            self._started = True
 
     def run_forever(self, cycle=10):
         """Run the scheduler in blocking mode (Worker Mode)."""
