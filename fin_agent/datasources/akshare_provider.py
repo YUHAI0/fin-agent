@@ -1,4 +1,5 @@
 """akshare 数据源实现。对外统一为 Tushare 风格的代码与列名。"""
+import re
 import threading
 import time
 
@@ -13,7 +14,7 @@ from fin_agent.datasources.normalize import (
     DAILY_COLUMNS, REALTIME_COLUMNS, normalize_date, rename_and_select, to_plain_code, to_ts_code,
 )
 
-_SPOT_CACHE = {"data": None, "ts": 0.0}
+_SPOT_CACHE = {"data": None, "ts": 0.0, "source": None}
 _SPOT_LOCK = threading.Lock()
 _SPOT_TTL_SECONDS = 5
 
@@ -31,17 +32,79 @@ _DAILY_MAPPING = {
     "涨跌额": "change",
 }
 
+_TX_DAILY_MAPPING = {
+    "date": "trade_date",
+    "open": "open",
+    "close": "close",
+    "high": "high",
+    "low": "low",
+    "volume": "vol",
+    "amount": "amount",
+}
+
+_INDEX_SINA_MAPPING = {
+    "date": "trade_date",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "close": "close",
+    "volume": "vol",
+}
+
+
+def _market_symbol(ts_code):
+    """600519.SH -> sh600519；002594.SZ -> sz002594。"""
+    full = to_ts_code(ts_code)
+    plain = to_plain_code(full)
+    if full.endswith(".SH"):
+        return f"sh{plain}"
+    if full.endswith(".BJ"):
+        return f"bj{plain}"
+    return f"sz{plain}"
+
+
+def _plain_from_spot_code(code):
+    text = str(code).strip()
+    return re.sub(r"^(sh|sz|bj)", "", text, flags=re.IGNORECASE)
+
 
 def _spot_snapshot():
-    """全市场实时快照，5 秒内复用，避免组合估值时重复请求。"""
+    """全市场实时快照，5 秒内复用。东财失败时回退新浪。"""
     with _SPOT_LOCK:
         now = time.time()
         if _SPOT_CACHE["data"] is not None and now - _SPOT_CACHE["ts"] < _SPOT_TTL_SECONDS:
-            return _SPOT_CACHE["data"]
-        df = ak.stock_zh_a_spot_em()
+            return _SPOT_CACHE["data"], _SPOT_CACHE["source"]
+
+        source = "em"
+        try:
+            df = ak.stock_zh_a_spot_em()
+        except Exception:
+            df = ak.stock_zh_a_spot()
+            source = "sina"
+
         _SPOT_CACHE["data"] = df
         _SPOT_CACHE["ts"] = now
-        return df
+        _SPOT_CACHE["source"] = source
+        return df, source
+
+
+def _with_derived_ohlc(out):
+    """由收盘价序列补 pre_close / change / pct_chg。"""
+    if not len(out):
+        return out
+    out = out.copy()
+    closes = pd.to_numeric(out["close"], errors="coerce")
+    out["pre_close"] = closes.shift(1)
+    if out["pre_close"].isna().iloc[0] and len(closes):
+        # 无前一日时用开盘近似，避免整列空
+        opens = pd.to_numeric(out["open"], errors="coerce")
+        out.loc[out.index[0], "pre_close"] = opens.iloc[0]
+    out["change"] = closes - pd.to_numeric(out["pre_close"], errors="coerce")
+    out["pct_chg"] = out.apply(
+        lambda r: (float(r["change"]) / float(r["pre_close"]) * 100) if r["pre_close"] else 0.0,
+        axis=1,
+    )
+    return out
 
 
 class AkshareProvider(MarketDataProvider):
@@ -68,18 +131,39 @@ class AkshareProvider(MarketDataProvider):
     def get_daily_price(self, ts_code, start_date=None, end_date=None, adj=None):
         self.require(CAP_DAILY_PRICE)
         full = to_ts_code(ts_code)
-        df = ak.stock_zh_a_hist(
-            symbol=to_plain_code(full),
-            period="daily",
-            start_date=normalize_date(start_date) or "19900101",
-            end_date=normalize_date(end_date) or "20991231",
-            adjust=_ADJ_MAP.get(adj, ""),
-        )
-        out = rename_and_select(df, _DAILY_MAPPING, DAILY_COLUMNS)
+        plain = to_plain_code(full)
+        start = normalize_date(start_date) or "19900101"
+        end = normalize_date(end_date) or "20991231"
+        adjust = _ADJ_MAP.get(adj, "")
+
+        try:
+            df = ak.stock_zh_a_hist(
+                symbol=plain,
+                period="daily",
+                start_date=start,
+                end_date=end,
+                adjust=adjust,
+            )
+            out = rename_and_select(df, _DAILY_MAPPING, DAILY_COLUMNS)
+        except Exception:
+            # 东财日线不稳定时回退腾讯
+            df = ak.stock_zh_a_hist_tx(
+                symbol=_market_symbol(full),
+                start_date=start,
+                end_date=end,
+                adjust=adjust,
+            )
+            out = rename_and_select(df, _TX_DAILY_MAPPING, DAILY_COLUMNS)
+            out = _with_derived_ohlc(out)
+
         if len(out):
             out["ts_code"] = full
             out["trade_date"] = out["trade_date"].apply(normalize_date)
-            out["pre_close"] = out["close"] - out["change"]
+            # 东财自带涨跌额时可直接还原昨收；腾讯回退路径需由收盘序列推导
+            if out["change"].notna().any() and out["pre_close"].isna().all():
+                out["pre_close"] = out["close"] - out["change"]
+            elif out["pre_close"].isna().any():
+                out = _with_derived_ohlc(out)
         return out
 
     def get_realtime_price(self, ts_code):
@@ -90,12 +174,22 @@ class AkshareProvider(MarketDataProvider):
             full = to_ts_code(code)
             wanted[to_plain_code(full)] = full
 
-        snapshot = _spot_snapshot()
-        hit = snapshot[snapshot["代码"].isin(wanted.keys())]
+        snapshot, source = _spot_snapshot()
+        code_col = "代码"
+        if source == "sina":
+            # 新浪代码形如 sz002594
+            snapshot = snapshot.copy()
+            snapshot["_plain"] = snapshot[code_col].map(_plain_from_spot_code)
+            hit = snapshot[snapshot["_plain"].isin(wanted.keys())]
+            code_key = "_plain"
+        else:
+            hit = snapshot[snapshot[code_col].isin(wanted.keys())]
+            code_key = code_col
 
         rows = []
         for _, row in hit.iterrows():
-            plain = row["代码"]
+            plain = row[code_key] if code_key == "_plain" else row[code_col]
+            plain = _plain_from_spot_code(plain)
             rows.append({
                 "ts_code": wanted[plain],
                 "name": row.get("名称"),
@@ -167,18 +261,33 @@ class AkshareProvider(MarketDataProvider):
     def get_index_daily(self, ts_code, start_date=None, end_date=None):
         self.require(CAP_INDEX_DAILY)
         plain = to_plain_code(ts_code)
-        df = ak.index_zh_a_hist(
-            symbol=plain,
-            period="daily",
-            start_date=normalize_date(start_date) or "19900101",
-            end_date=normalize_date(end_date) or "20991231",
-        )
-        out = rename_and_select(df, _DAILY_MAPPING, DAILY_COLUMNS)
-        if len(out):
-            out["ts_code"] = str(ts_code).upper()
-            out["trade_date"] = out["trade_date"].apply(normalize_date)
-            out["pre_close"] = out["close"] - out["change"]
-        return out
+        start = normalize_date(start_date) or "19900101"
+        end = normalize_date(end_date) or "20991231"
+
+        try:
+            df = ak.index_zh_a_hist(
+                symbol=plain,
+                period="daily",
+                start_date=start,
+                end_date=end,
+            )
+            out = rename_and_select(df, _DAILY_MAPPING, DAILY_COLUMNS)
+            if len(out):
+                out["ts_code"] = str(ts_code).upper()
+                out["trade_date"] = out["trade_date"].apply(normalize_date)
+                out["pre_close"] = out["close"] - out["change"]
+            return out
+        except Exception:
+            # 东财指数日线失败时回退新浪
+            symbol = _market_symbol(ts_code if "." in str(ts_code) else f"{plain}.SH")
+            df = ak.stock_zh_index_daily(symbol=symbol)
+            out = rename_and_select(df, _INDEX_SINA_MAPPING, DAILY_COLUMNS)
+            if len(out):
+                out["ts_code"] = str(ts_code).upper()
+                out["trade_date"] = out["trade_date"].apply(normalize_date)
+                out = out[(out["trade_date"] >= start) & (out["trade_date"] <= end)]
+                out = _with_derived_ohlc(out)
+            return out
 
     def get_trade_calendar(self, start_date=None, end_date=None):
         self.require(CAP_TRADE_CALENDAR)
