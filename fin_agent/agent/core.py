@@ -18,16 +18,44 @@ class FinAgent:
         self.history = []
         self._init_history()
 
+    # 无 Tushare Token 时不可用的工具清单，用于提示模型不要反复尝试
+    TUSHARE_ONLY_TOOLS = (
+        "screen_stocks, get_long_tail_stocks, get_moneyflow, get_limit_list, get_top_list, "
+        "get_forecast, get_concept_detail, get_hsgt_top10, get_hk_stock_basic, get_hk_daily_price, "
+        "get_hk_realtime_price, get_us_stock_basic, get_us_daily_price, get_us_realtime_price, "
+        "get_etf_basic, get_etf_daily_price, get_cb_basic, get_cb_daily_price, "
+        "get_futures_basic, get_futures_daily_price, get_macro_gdp, get_macro_cpi, get_macro_m2, "
+        "get_macro_interest_rate, get_global_index_comparison"
+    )
+
+    def _get_datasource_note(self):
+        source = Config.DATA_SOURCE or "akshare"
+        if Config.TUSHARE_TOKEN:
+            return (
+                f"### DATA SOURCE ###\\n"
+                f"Current market data source: {source}. All listed tools are available.\\n\\n"
+            )
+        return (
+            f"### DATA SOURCE ###\\n"
+            f"Current market data source: {source}. The user has NOT configured a Tushare token, "
+            f"so the following tools are UNAVAILABLE and will return a setup hint instead of data. "
+            f"Do NOT call them; if the user asks for such data, tell them to configure a Tushare "
+            f"token in the settings page.\\n"
+            f"Unavailable tools: {self.TUSHARE_ONLY_TOOLS}\\n\\n"
+        )
+
     def _get_system_content(self):
         # Get user profile summary
         user_profile_summary = get_profile_manager().get_profile_summary()
+        datasource_note = self._get_datasource_note()
 
         return (
-            "You are a financial assistant powered by LLM and Tushare.\\n"
+            "You are a financial assistant powered by an LLM and live market data tools.\\n"
             "You can help users analyze stocks, check prices, and provide recommendations.\\n\\n"
+            f"{datasource_note}"
             "### CRITICAL PROTOCOL ###\\n"
             "1. **CHECK TIME FIRST**: For any request involving market data, 'today', 'latest', or time-sensitive info, you MUST first call 'get_current_time' to establish the correct date. This is mandatory.\\n"
-            "2. **USE TOOLS**: All market data MUST be obtained via Tushare tools. Do not use internal knowledge.\\n\\n"
+            "2. **USE TOOLS**: All market data MUST be obtained via the provided market data tools. Do not use internal knowledge.\\n\\n"
             "### TOOL USAGE ###\\n"
             "For 'latest' or 'current' price queries, use 'get_realtime_price'. "
             "For trends and analysis, use 'get_daily_price' to get historical context (optional adj: qfq/前复权, hfq/后复权, omit for 不复权). "
