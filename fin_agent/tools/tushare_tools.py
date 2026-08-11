@@ -1,6 +1,7 @@
 import tushare as ts
 import pandas as pd
 from fin_agent.config import Config
+import inspect
 import json
 from datetime import datetime, timedelta
 from fin_agent.tools.technical_indicators import get_technical_indicators, get_technical_patterns
@@ -25,8 +26,41 @@ from fin_agent.tools.profile_tools import (
     update_user_profile,
     get_user_profile
 )
+from fin_agent.tools.news_tools import (
+    NEWS_TOOLS_SCHEMA,
+    create_news_subscription,
+    delete_news_subscription,
+    enable_news_subscription,
+    list_news_subscriptions,
+    pause_news_subscription,
+    query_notified_news,
+    refresh_news,
+    update_news_subscription,
+)
 from fin_agent.tools.market_tools import requires_tushare
 from fin_agent.tools import market_tools
+
+NEWS_TOOL_FUNCTIONS = {
+    "query_notified_news": query_notified_news,
+    "create_news_subscription": create_news_subscription,
+    "list_news_subscriptions": list_news_subscriptions,
+    "update_news_subscription": update_news_subscription,
+    "pause_news_subscription": pause_news_subscription,
+    "enable_news_subscription": enable_news_subscription,
+    "delete_news_subscription": delete_news_subscription,
+    "refresh_news": refresh_news,
+}
+
+
+def _invalid_tool_arguments(tool_name, message):
+    if tool_name in NEWS_TOOL_FUNCTIONS:
+        return json.dumps(
+            {"ok": False, "error": f"新闻工具参数错误：{message}"},
+            ensure_ascii=False,
+            indent=2,
+        )
+    return f"Error: Invalid tool arguments ({message})."
+
 
 # Initialize Tushare - will be re-initialized when called if Config updates
 def get_pro():
@@ -1923,7 +1957,13 @@ BASE_TOOLS_SCHEMA = [
 ]
 
 # Combine schemas
-TOOLS_SCHEMA = BASE_TOOLS_SCHEMA + PORTFOLIO_TOOLS_SCHEMA + SCHEDULER_TOOLS_SCHEMA + PROFILE_TOOLS_SCHEMA
+TOOLS_SCHEMA = (
+    BASE_TOOLS_SCHEMA
+    + PORTFOLIO_TOOLS_SCHEMA
+    + SCHEDULER_TOOLS_SCHEMA
+    + PROFILE_TOOLS_SCHEMA
+    + NEWS_TOOLS_SCHEMA
+)
 
 # Helper to execute tool calls
 def execute_tool_call(tool_name, arguments):
@@ -1942,12 +1982,26 @@ def execute_tool_call(tool_name, arguments):
                     if isinstance(val, dict):
                         arguments = val
                     else:
-                        return "Error: Invalid JSON arguments (not a dict)."
+                        return _invalid_tool_arguments(
+                            tool_name, "参数必须是 JSON 对象"
+                        )
                 except:
-                    return "Error: Invalid JSON arguments."
+                    return _invalid_tool_arguments(
+                        tool_name, "无法解析 JSON 参数"
+                    )
     
     if arguments is None:
         arguments = {}
+    if not isinstance(arguments, dict):
+        return _invalid_tool_arguments(tool_name, "参数必须是对象")
+
+    if tool_name in NEWS_TOOL_FUNCTIONS:
+        function = NEWS_TOOL_FUNCTIONS[tool_name]
+        try:
+            inspect.signature(function).bind(**arguments)
+        except TypeError as exc:
+            return _invalid_tool_arguments(tool_name, str(exc))
+        return function(**arguments)
 
     if tool_name == "get_current_time":
         return get_current_time()

@@ -4,6 +4,7 @@ import threading
 import json
 import os
 import logging
+import uuid
 from pathlib import Path
 from fin_agent.config import Config
 from fin_agent.notification import NotificationManager
@@ -103,7 +104,8 @@ class TaskScheduler:
 
     def add_price_alert(self, ts_code, operator, threshold, email=None):
         self.load_tasks()
-        task_id = f"price_alert_{ts_code}_{int(time.time())}"
+        # 秒级 time.time() 在同秒连建两条时会撞 ID 并覆盖；用 uuid 保证唯一
+        task_id = f"price_alert_{ts_code}_{uuid.uuid4().hex[:8]}"
         task = {
             "id": task_id,
             "type": "price_alert",
@@ -141,6 +143,52 @@ class TaskScheduler:
         self.load_tasks()
         return list(self.tasks.values())
 
+    def list_tasks_enriched(self):
+        """列表附带股票名称与现价涨跌，供前端提醒弹窗展示（不写回 tasks.json）。"""
+        tasks = [dict(t) for t in self.list_tasks()]
+        codes = []
+        seen = set()
+        for t in tasks:
+            code = t.get("ts_code")
+            if t.get("type") == "price_alert" and code and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        if not codes:
+            return tasks
+
+        try:
+            from fin_agent.datasources import get_provider
+
+            df = get_provider().get_realtime_price(codes)
+        except Exception as e:
+            logger.warning(f"Failed to enrich alert quotes: {e}")
+            return tasks
+
+        quotes = {}
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                code = row.get("ts_code")
+                if not code:
+                    continue
+                try:
+                    price = float(row.get("price") or 0)
+                    change = float(row.get("change") or 0)
+                    pct = float(row.get("pct_chg") or 0)
+                except (TypeError, ValueError):
+                    price, change, pct = 0.0, 0.0, 0.0
+                quotes[str(code)] = {
+                    "stock_name": row.get("name") or None,
+                    "current_price": price,
+                    "change": change,
+                    "pct_chg": pct,
+                }
+
+        for t in tasks:
+            q = quotes.get(t.get("ts_code"))
+            if q:
+                t.update(q)
+        return tasks
+
     def remove_task(self, task_id):
         self.load_tasks()
         if task_id in self.tasks:
@@ -173,69 +221,29 @@ class TaskScheduler:
                 self._check_price_alert(task)
 
     def _check_price_alert(self, task):
-        from fin_agent.tools.tushare_tools import get_realtime_price
-        
+        from fin_agent.datasources import get_provider
+
         try:
             ts_code = task['ts_code']
             operator = task['operator']
             threshold = task['threshold']
             email = task['email']
-            
-            # Fetch Price
-            # Note: Tushare limits. We should probably cache this if many tasks watch same stock.
-            # But for simple version, fetch one by one.
-            price_info = get_realtime_price(ts_code)
-            
-            if not price_info:
-                logger.warning(f"Could not get price for {ts_code}")
-                return
-                
-            # Parse price (get_realtime_price returns a formatted string or list, 
-            # let's assume it returns a dict-like or we parse the tool output)
-            # Actually tool returns a string. We need internal function to get raw data for robustness.
-            # For now, let's use tushare API directly via tools helper if available, 
-            # OR parse the string. 
-            # Better: use get_realtime_price but we need the float value.
-            
-            # Re-implementing simple fetch here to avoid parsing the AI-friendly string output of tools
-            import tushare as ts
-            pro = ts.pro_api(Config.TUSHARE_TOKEN)
-            
-            # Use Tushare's standard realtime API if available, otherwise fallback to legacy
-            # NOTE: tushare.pro.realtime_quote is NOT a standard PRO interface.
-            # Tushare PRO uses 'get_realtime_quotes' from legacy 'ts' package for free realtime data (Sina source).
-            # The 'pro' object typically handles historical data.
-            #
-            # The error "请指定正确的接口名" usually means we called a non-existent method on pro_api.
-            # pro.realtime_quote() is likely invalid.
-            #
-            # Let's use the legacy method which works for realtime snapshot.
-            
-            # df = pro.realtime_quote(ts_code=ts_code) # This was causing the error
-            
-            # Using legacy ts.get_realtime_quotes
-            # It expects code like '000001', '600519', no suffix usually, but let's try handling suffix.
-            code_parts = ts_code.split('.')
-            code_no_suffix = code_parts[0]
-            
-            df = ts.get_realtime_quotes(code_no_suffix)
-            
-            if df is None or df.empty:
-                 logger.warning(f"No data for {ts_code}")
-                 return
 
-            # Legacy df columns are: name, open, pre_close, price, high, low, bid, ask, volume, amount, date, time, code
-            current_price = float(df.iloc[0]['price'])
-            
+            df = get_provider().get_realtime_price(ts_code)
+            if df is None or df.empty:
+                logger.warning(f"No data for {ts_code}")
+                return
+
+            record = df.iloc[0].to_dict()
+            current_price = float(record.get('price') or 0)
+
             if self.verbose:
                 print(f"  [Task {task['id']}] {ts_code}: {current_price} (Target: {operator} {threshold})")
 
             # Special case for "0" price (suspension or error)
             if current_price == 0:
                 return
-            
-            record = df.iloc[0].to_dict()
-            
+
             # Compare
             triggered = False
             if operator == ">" and current_price > threshold:
@@ -246,9 +254,9 @@ class TaskScheduler:
                 triggered = True
             elif operator == "<=" and current_price <= threshold:
                 triggered = True
-                
+
             if triggered:
-                stock_name = record.get('name', ts_code)
+                stock_name = record.get('name') or ts_code
                 # 优化邮件标题，使其看起来更正规，减少被识别为垃圾邮件的可能
                 subject = f"[Fin-Agent] 股价提醒: {stock_name} ({ts_code}) 触发条件"
                 

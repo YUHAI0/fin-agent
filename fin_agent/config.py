@@ -2,8 +2,13 @@ import os
 import sys
 import json
 import platform
+import tempfile
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
+
+_APP_CONFIG_LOCK = threading.RLock()
+
 
 class Config:
     TUSHARE_TOKEN = None
@@ -25,6 +30,7 @@ class Config:
     DATA_SOURCE = "akshare"
     ALERT_POLL_INTERVAL_MINUTES = 10
     ALERT_TRADING_HOURS_ONLY = True
+    NEWS_POLL_INTERVAL_MINUTES = 5
     
     # Email Config
     EMAIL_SMTP_SERVER = None
@@ -89,13 +95,32 @@ class Config:
     def save_app_config(cls, config_data):
         """Save application specific configuration to JSON."""
         config_path = cls.get_app_config_path()
+        temp_path = None
         try:
-            current_config = cls.load_app_config()
-            current_config.update(config_data)
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(current_config, f, indent=2)
+            with _APP_CONFIG_LOCK:
+                current_config = cls.load_app_config()
+                current_config.update(config_data)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=os.path.dirname(config_path),
+                    prefix=".app_config.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as f:
+                    temp_path = f.name
+                    json.dump(current_config, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, config_path)
         except Exception as e:
             print(f"Failed to save app config: {e}")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     @classmethod
     def load(cls):
@@ -132,6 +157,14 @@ class Config:
         cls.ALERT_POLL_INTERVAL_MINUTES = min(max(interval, 1), 120)
 
         cls.ALERT_TRADING_HOURS_ONLY = bool(app_config.get("alert_trading_hours_only", True))
+
+        try:
+            news_interval = int(app_config.get("news_poll_interval_minutes", 5))
+        except (TypeError, ValueError):
+            news_interval = 5
+        cls.NEWS_POLL_INTERVAL_MINUTES = (
+            news_interval if news_interval in (5, 10, 15, 30) else 5
+        )
         
         # Fallback to env if not in json (migration)
         if not cls.WAKE_UP_SHORTCUT:
@@ -301,7 +334,13 @@ class Config:
         cls.load()
 
     @classmethod
-    def update_app_settings(cls, data_source, alert_poll_interval_minutes, alert_trading_hours_only):
+    def update_app_settings(
+        cls,
+        data_source,
+        alert_poll_interval_minutes,
+        alert_trading_hours_only,
+        news_poll_interval_minutes=None,
+    ):
         """更新行为类配置（非密钥），写入 app_config.json。"""
         if data_source not in ("akshare", "tushare"):
             data_source = "akshare"
@@ -311,14 +350,38 @@ class Config:
             interval = 10
         interval = min(max(interval, 1), 120)
 
-        cls.save_app_config({
+        settings = {
             "data_source": data_source,
             "alert_poll_interval_minutes": interval,
             "alert_trading_hours_only": bool(alert_trading_hours_only)
-        })
+        }
+        if news_poll_interval_minutes is not None:
+            try:
+                news_interval = int(news_poll_interval_minutes)
+            except (TypeError, ValueError):
+                news_interval = 5
+            if news_interval not in (5, 10, 15, 30):
+                news_interval = 5
+            settings["news_poll_interval_minutes"] = news_interval
+            cls.NEWS_POLL_INTERVAL_MINUTES = news_interval
+
+        cls.save_app_config(settings)
         cls.DATA_SOURCE = data_source
         cls.ALERT_POLL_INTERVAL_MINUTES = interval
         cls.ALERT_TRADING_HOURS_ONLY = bool(alert_trading_hours_only)
+
+    @classmethod
+    def update_news_poll_interval(cls, news_poll_interval_minutes):
+        """更新新闻轮询间隔，仅允许 5/10/15/30 分钟。"""
+        try:
+            interval = int(news_poll_interval_minutes)
+        except (TypeError, ValueError):
+            interval = 5
+        if interval not in (5, 10, 15, 30):
+            interval = 5
+        cls.save_app_config({"news_poll_interval_minutes": interval})
+        cls.NEWS_POLL_INTERVAL_MINUTES = interval
+        return interval
 
     @classmethod
     def setup(cls):
