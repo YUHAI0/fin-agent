@@ -213,6 +213,8 @@ class NewsMonitor:
         try:
             Config.load()
             self._reap_sink_tasks()
+            from fin_agent.news_sentiment import get_sentiment_labeler
+            get_sentiment_labeler().enqueue_backlog(self.history_store, limit=3)
             all_subscriptions = self.subscription_store.list_subscriptions()
             retry_payload = self._dispatch_pending_notifications(
                 all_subscriptions
@@ -263,7 +265,10 @@ class NewsMonitor:
                 "matched_symbols": match["matched_symbols"],
             } for match in pending.values()]
             try:
-                self.history_store.upsert_many(entries)
+                upsert_results = self.history_store.upsert_many(entries)
+                get_sentiment_labeler().enqueue_from_upsert_results(
+                    upsert_results, self.history_store,
+                )
                 self.state_store.merge_subscription_baselines(baseline_updates)
             except Exception:
                 raise

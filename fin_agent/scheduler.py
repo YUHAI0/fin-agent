@@ -16,6 +16,11 @@ import platform
 
 logger = logging.getLogger(__name__)
 
+
+def _noop_notification_sink(_payload):
+    return True
+
+
 # 全局唯一的调度线程与停止信号。init_agent() 会被重复调用，
 # 必须在模块级去重，实例级的 _started 无法阻止重复启动。
 _SCHEDULER_THREAD = None
@@ -75,8 +80,13 @@ class TaskScheduler:
             cls._instance.task_file = os.path.join(Config.get_config_dir(), "tasks.json")
             cls._instance.pid_file = os.path.join(Config.get_config_dir(), "scheduler.pid")
             cls._instance.verbose = False
+            cls._instance.notification_sink = _noop_notification_sink
             cls._instance.load_tasks()
         return cls._instance
+
+    def set_notification_sink(self, sink):
+        """注入桌面通知回调（桌面版 api.py 在启动时传入 enqueue_notification）。"""
+        self.notification_sink = sink or _noop_notification_sink
 
     def load_tasks(self):
         if not os.path.exists(self.task_file):
@@ -141,6 +151,7 @@ class TaskScheduler:
 
     def list_tasks(self):
         self.load_tasks()
+        self._purge_disabled_tasks()
         return list(self.tasks.values())
 
     def list_tasks_enriched(self):
@@ -197,12 +208,27 @@ class TaskScheduler:
             return True
         return False
 
+    def _purge_disabled_tasks(self):
+        """已触发的一次性提醒会标记为 disabled；启动/轮询时自动清理。"""
+        disabled_ids = [
+            task_id for task_id, task in self.tasks.items()
+            if not task.get("enabled", True)
+        ]
+        if not disabled_ids:
+            return 0
+        for task_id in disabled_ids:
+            del self.tasks[task_id]
+        self.save_tasks()
+        logger.info("Purged %d disabled task(s)", len(disabled_ids))
+        return len(disabled_ids)
+
     def check_conditions(self):
         # In interactive mode (not verbose), yield to worker if one is running
         if not self.verbose and self._is_worker_running():
             return
 
         self.load_tasks()
+        self._purge_disabled_tasks()
         
         if self.verbose:
             enabled_count = sum(1 for t in self.tasks.values() if t.get('enabled', True))
@@ -332,6 +358,26 @@ class TaskScheduler:
                 """
                 
                 print(f"\n[Scheduler] Triggering task {task['id']}: {subject}")
+
+                desktop_body = (
+                    f"{ts_code} 现价 {current_price:.2f}，"
+                    f"已触发条件 {operator} {threshold}"
+                )
+                try:
+                    self.notification_sink({
+                        "notification_id": f"price_alert_{task['id']}_{int(time.time())}",
+                        "type": "price_alert",
+                        "title": f"股价提醒：{stock_name}",
+                        "body": desktop_body,
+                        "task_id": task["id"],
+                        "ts_code": ts_code,
+                        "timestamp": time.time(),
+                    })
+                except Exception as notify_err:
+                    logger.error(
+                        f"Failed to enqueue desktop notification for {task['id']}: {notify_err}"
+                    )
+
                 success = NotificationManager.send_email(subject, content, email, html_content=html_content)
                 
                 if success:
@@ -339,9 +385,12 @@ class TaskScheduler:
                 else:
                     print(f"[Scheduler] Failed to send email to {email}")
 
-                # Disable task after firing (one-time alert)
-                task["enabled"] = False
-                self.save_tasks()
+                # 一次性提醒：触发后自动删除
+                task_id = task["id"]
+                if task_id in self.tasks:
+                    del self.tasks[task_id]
+                    self.save_tasks()
+                    print(f"[Scheduler] Task {task_id} removed after trigger")
                     
         except Exception as e:
             if "403" in str(e) and "Forbidden" in str(e):

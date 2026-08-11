@@ -31,6 +31,7 @@ class Config:
     ALERT_POLL_INTERVAL_MINUTES = 10
     ALERT_TRADING_HOURS_ONLY = True
     NEWS_POLL_INTERVAL_MINUTES = 5
+    NEWS_SENTIMENT_ENABLED = True
     
     # Email Config
     EMAIL_SMTP_SERVER = None
@@ -164,6 +165,11 @@ class Config:
             news_interval = 5
         cls.NEWS_POLL_INTERVAL_MINUTES = (
             news_interval if news_interval in (5, 10, 15, 30) else 5
+        )
+
+        sentiment_raw = app_config.get("news_sentiment_enabled")
+        cls.NEWS_SENTIMENT_ENABLED = (
+            True if sentiment_raw is None else bool(sentiment_raw)
         )
         
         # Fallback to env if not in json (migration)
@@ -340,6 +346,7 @@ class Config:
         alert_poll_interval_minutes,
         alert_trading_hours_only,
         news_poll_interval_minutes=None,
+        news_sentiment_enabled=None,
     ):
         """更新行为类配置（非密钥），写入 app_config.json。"""
         if data_source not in ("akshare", "tushare"):
@@ -364,6 +371,10 @@ class Config:
                 news_interval = 5
             settings["news_poll_interval_minutes"] = news_interval
             cls.NEWS_POLL_INTERVAL_MINUTES = news_interval
+
+        if news_sentiment_enabled is not None:
+            settings["news_sentiment_enabled"] = bool(news_sentiment_enabled)
+            cls.NEWS_SENTIMENT_ENABLED = bool(news_sentiment_enabled)
 
         cls.save_app_config(settings)
         cls.DATA_SOURCE = data_source

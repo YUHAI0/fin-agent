@@ -201,6 +201,12 @@ def _valid_history_item(item):
         value = item.get(key)
         if value is not None and not _is_string_list(value):
             return False
+    sentiment = item.get("sentiment")
+    if sentiment is not None and sentiment not in ("bullish", "bearish", "neutral"):
+        return False
+    labeled_at = item.get("sentiment_labeled_at")
+    if labeled_at is not None and not isinstance(labeled_at, str):
+        return False
     return True
 
 
@@ -579,6 +585,33 @@ class NotifiedNewsStore:
                 if item.get("notification_pending", False)
             ]
         return items[:max(int(limit), 0)]
+
+    def list_unlabeled_sentiment(self, limit=50):
+        with _HISTORY_LOCK:
+            items = [
+                dict(item) for item in self._load()["items"]
+                if item.get("sentiment") not in ("bullish", "bearish", "neutral")
+            ]
+        return items[:max(int(limit), 0)]
+
+    def update_sentiment(self, news_id, sentiment):
+        if sentiment not in ("bullish", "bearish", "neutral"):
+            return False
+        with _HISTORY_LOCK:
+            data = self._load()
+            changed = False
+            now = _now()
+            for item in data["items"]:
+                if item.get("id") != news_id:
+                    continue
+                item["sentiment"] = sentiment
+                item["sentiment_labeled_at"] = now
+                item["updated_at"] = now
+                changed = True
+                break
+            if changed:
+                self._save(data)
+            return changed
 
     def mark_notifications_dispatched(self, news_ids):
         news_ids = set(_string_list(news_ids))
