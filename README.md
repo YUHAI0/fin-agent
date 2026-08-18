@@ -249,4 +249,4 @@ Agent 通过工具 **`run_backtest`** 调用内置回测引擎：传入 **Tushar
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=YUHAI0/fin-agent&type=date&legend=top-left)](https://www.star-history.com/#YUHAI0/fin-agent&type=date&legend=top-left)
+[![Star History Chart](https://star-history.dera.page/svg?repos=YUHAI0/fin-agent&type=date&legend=top-left)](https://star-history.dera.page/#YUHAI0/fin-agent&type=date&legend=top-left)
